@@ -1,0 +1,52 @@
+[
+  {
+    "question": "什么是光合作用？请简要解释。",
+    "reference_answer": "光合作用是植物、藻类和某些细菌利用光能将二氧化碳和水转化为有机物（葡萄糖）并释放氧气的过程。",
+    "category": "自然科学"
+  },
+  {
+    "question": "牛顿第一定律的内容是什么？",
+    "reference_answer": "任何物体在不受外力作用时，都将保持静止或匀速直线运动状态，直到有外力迫使它改变运动状态为止。",
+    "category": "物理"
+  },
+  {
+    "question": "Python 和 Java 的主要区别是什么？",
+    "reference_answer": "Python 是解释型动态类型语言，语法简洁，适合快速开发；Java 是编译型静态类型语言，性能较高，适合大型企业应用。",
+    "category": "编程"
+  },
+  {
+    "question": "什么是区块链技术？",
+    "reference_answer": "区块链是一种去中心化的分布式账本技术，数据以区块链接存储，具有不可篡改、透明可追溯的特点。",
+    "category": "技术"
+  },
+  {
+    "question": "温室效应的成因是什么？",
+    "reference_answer": "温室气体（二氧化碳、甲烷等）吸收地表辐射的红外线，使地球表面温度升高，人类活动排放大量温室气体导致全球变暖。",
+    "category": "环境"
+  },
+  {
+    "question": "什么是 RESTful API？",
+    "reference_answer": "RESTful API 是基于 HTTP 协议的 Web 服务架构风格，资源用 URL 标识，用 HTTP 方法（GET/POST/PUT/DELETE）表达操作，无状态、统一接口。",
+    "category": "编程"
+  },
+  {
+    "question": "什么是过拟合？如何避免？",
+    "reference_answer": "过拟合指模型在训练集表现好但泛化差。避免方法：增加数据量、正则化、早停、交叉验证、Dropout 等。",
+    "category": "人工智能"
+  },
+  {
+    "question": "水的化学式是什么？它由哪些元素组成？",
+    "reference_answer": "水的化学式是 H2O，由一个氧原子和两个氢原子组成，是氢和氧的化合物。",
+    "category": "化学"
+  },
+  {
+    "question": "什么是数据库事务的 ACID 特性？",
+    "reference_answer": "ACID 是事务的四个特性：原子性（Atomicity）、一致性（Consistency）、隔离性（Isolation）、持久性（Durability）。",
+    "category": "技术"
+  },
+  {
+    "question": "简述机器学习的三大类任务。",
+    "reference_answer": "三大类：监督学习（有标签）、无监督学习（无标签）、强化学习（通过奖励信号学习策略）。",
+    "category": "人工智能"
+  }
+]

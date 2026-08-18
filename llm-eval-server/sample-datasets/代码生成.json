@@ -1,0 +1,52 @@
+[
+  {
+    "question": "写一个 Python 函数，判断一个数是否为偶数。",
+    "reference_answer": "def is_even(n):\n    return n % 2 == 0",
+    "category": "Python"
+  },
+  {
+    "question": "用 Python 实现一个函数，计算斐波那契数列的第 n 项。",
+    "reference_answer": "def fib(n):\n    if n <= 1:\n        return n\n    return fib(n-1) + fib(n-2)",
+    "category": "Python"
+  },
+  {
+    "question": "写一个函数，将字符串反转。",
+    "reference_answer": "def reverse_string(s):\n    return s[::-1]",
+    "category": "Python"
+  },
+  {
+    "question": "用 Python 写一个列表去重的函数，保持原有顺序。",
+    "reference_answer": "def dedupe(lst):\n    seen = set()\n    result = []\n    for item in lst:\n        if item not in seen:\n            seen.add(item)\n            result.append(item)\n    return result",
+    "category": "Python"
+  },
+  {
+    "question": "写一个函数，统计字符串中每个字符出现的次数。",
+    "reference_answer": "from collections import Counter\ndef char_count(s):\n    return Counter(s)",
+    "category": "Python"
+  },
+  {
+    "question": "实现一个二分查找函数，返回目标值在有序列表中的索引，不存在返回 -1。",
+    "reference_answer": "def binary_search(arr, target):\n    left, right = 0, len(arr) - 1\n    while left <= right:\n        mid = (left + right) // 2\n        if arr[mid] == target:\n            return mid\n        elif arr[mid] < target:\n            left = mid + 1\n        else:\n            right = mid - 1\n    return -1",
+    "category": "算法"
+  },
+  {
+    "question": "用 Python 判断一个字符串是否为回文。",
+    "reference_answer": "def is_palindrome(s):\n    s = s.lower()\n    return s == s[::-1]",
+    "category": "Python"
+  },
+  {
+    "question": "写一个函数，找出列表中的最大值。",
+    "reference_answer": "def find_max(lst):\n    return max(lst)",
+    "category": "Python"
+  },
+  {
+    "question": "实现一个简单的冒泡排序函数。",
+    "reference_answer": "def bubble_sort(arr):\n    n = len(arr)\n    for i in range(n):\n        for j in range(0, n-i-1):\n            if arr[j] > arr[j+1]:\n                arr[j], arr[j+1] = arr[j+1], arr[j]\n    return arr",
+    "category": "算法"
+  },
+  {
+    "question": "写一个 Python 函数，判断两个字符串是否互为字母异位词（anagram）。",
+    "reference_answer": "def is_anagram(s1, s2):\n    return sorted(s1) == sorted(s2)",
+    "category": "Python"
+  }
+]
