@@ -28,6 +28,7 @@ logs/
 startRemaining.bat
 /start-dev.cmd
 /start-kafka.cmd
+llm-eval-server/start-kafka.cmd
 REMEDIATION_PLAN.md
 
 # ============ 系统文件 ============
