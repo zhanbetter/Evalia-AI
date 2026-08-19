@@ -86,7 +86,7 @@ export default {
     const myRole = ref(localStorage.getItem('eval-reviewer-role') || 'normal')
 
     const currentTask = computed(() => tasks.value.find(t => t.id === selectedTaskId.value) || null)
-    const statusClass = (s) => ({ PENDING: 'pend', RUNNING: 'run', COMPLETED: 'done', FAILED: 'fail' }[s] || 'pend')
+    const statusClass = (s) => ({ PENDING: 'pend', RUNNING: 'run', COMPLETED: 'done', FAILED: 'fail', CANCELLED: 'fail' }[s] || 'pend')
 
     const setRole = (r) => {
       myRole.value = r
@@ -121,7 +121,7 @@ export default {
 </script>
 
 <style scoped>
-.review-page { max-width: 1280px; margin: 0 auto; padding: 24px 20px; font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif; background: var(--bg-root); color: var(--text-prime); line-height: 1.6; }
+.review-page { max-width: 1360px; margin: 0 auto; padding: 24px 20px; font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif; background: var(--bg-root); color: var(--text-prime); line-height: 1.6; }
 .review-header { background: linear-gradient(135deg, #8b5cf6, #6d28d9); border-radius: 16px; padding: 28px 32px; margin-bottom: 20px; color: #fff; }
 .review-header h1 { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
 .review-header .meta { font-size: 13px; opacity: 0.85; }

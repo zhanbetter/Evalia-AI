@@ -60,8 +60,8 @@
           <div class="label">Badcase（{{ overall.badcaseRate || 0 }}%）</div>
         </div>
         <div class="kpi r">
-          <div class="num">{{ overall.badcaseRate || 0 }}%</div>
-          <div class="label">整体 Badcase 率</div>
+          <div class="num">{{ overall.unknownCount || 0 }}</div>
+          <div class="label">Unknown（{{ overall.unknownRate || 0 }}%）</div>
         </div>
       </div>
 
@@ -75,7 +75,8 @@
               :class="getDimClass(ds.badcaseRate)">
               <div class="tc-name">{{ ds.dimension }}</div>
               <div class="tc-rate">{{ (100 - ds.badcaseRate).toFixed(1) }}%</div>
-              <div class="tc-sub">采纳率 · {{ ds.totalCount - ds.badcaseCount }}/{{ ds.totalCount }} Goodcase</div>
+              <div class="tc-sub">采纳率 · {{ (ds.goodCount ?? (ds.totalCount - ds.badcaseCount)) }}/{{ ds.totalCount }} Goodcase</div>
+              <div class="tc-sub" v-if="(ds.unknownCount || 0) > 0">其中 {{ ds.unknownCount }} 条 Unknown（无法判断）</div>
               <div class="mini-bar">
                 <div class="mini-bar-fill" :style="{ width: (100 - ds.badcaseRate) + '%' }"></div>
               </div>
@@ -116,11 +117,11 @@
             </div>
             <div class="cmp-grid">
               <div class="cmp-cell" v-for="a in g.answers" :key="a.modelConfigId"
-                :class="a.isBadcase === 1 ? 'bad' : 'good'">
+                :class="a.isBadcase === 1 ? 'bad' : a.isBadcase === 0 ? 'good' : 'unk'">
                 <div class="cmp-cell-head">
                   <span class="cmp-model">{{ a.modelName }}</span>
-                  <span :class="['cmp-status', a.isBadcase === 1 ? 'bad' : a.isBadcase === 0 ? 'good' : 'none']">
-                    {{ a.isBadcase === 1 ? 'Badcase' : a.isBadcase === 0 ? 'Goodcase' : '未判定' }}
+                  <span :class="['cmp-status', a.isBadcase === 1 ? 'bad' : a.isBadcase === 0 ? 'good' : 'unk']">
+                    {{ a.isBadcase === 1 ? 'Badcase' : a.isBadcase === 0 ? 'Goodcase' : 'Unknown' }}
                   </span>
                 </div>
                 <div class="cmp-answer">{{ a.response || '（无回答）' }}</div>
@@ -147,11 +148,12 @@
               <tr>
                 <th style="width:22%">维度</th>
                 <th style="width:14%">模型</th>
-                <th class="c" style="width:8%">Good</th>
-                <th class="c" style="width:8%">Bad</th>
+                <th class="c" style="width:7%">Good</th>
+                <th class="c" style="width:7%">Bad</th>
+                <th class="c" style="width:8%">Unknown</th>
                 <th class="c" style="width:8%">采纳率</th>
                 <th style="width:20%">占比</th>
-                <th style="width:20%">操作</th>
+                <th style="width:14%">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -159,13 +161,15 @@
               <tr v-for="os in overallRows" :key="'o-' + os.modelConfigId">
                 <td><strong>整体</strong></td>
                 <td>{{ getModelName(os.modelConfigId) }}</td>
-                <td class="c"><span class="badge badge-g">{{ os.totalCount - os.badcaseCount }}</span></td>
+                <td class="c"><span class="badge badge-g">{{ os.goodCount ?? (os.totalCount - os.badcaseCount) }}</span></td>
                 <td class="c"><span class="badge badge-r">{{ os.badcaseCount }}</span></td>
+                <td class="c"><span class="badge badge-u">{{ os.unknownCount || 0 }}</span></td>
                 <td class="c"><strong :style="{ color: os.badcaseRate > 20 ? 'var(--red)' : 'var(--accent)' }">{{ (100 - os.badcaseRate).toFixed(1) }}%</strong></td>
                 <td>
                   <div class="hbar">
-                    <div class="hbar-good" :style="{ width: (100 - os.badcaseRate) + '%' }">{{ Math.round(100 - os.badcaseRate) }}%</div>
+                    <div class="hbar-good" :style="{ width: goodPct(os) + '%' }">{{ Math.round(goodPct(os)) }}%</div>
                     <div class="hbar-bad" :style="{ width: os.badcaseRate + '%' }">{{ os.badcaseCount }}</div>
+                    <div class="hbar-unk" v-if="(os.unknownCount || 0) > 0" :style="{ width: unkPct(os) + '%' }">{{ Math.round(unkPct(os)) }}%</div>
                   </div>
                 </td>
                 <td></td>
@@ -174,13 +178,15 @@
               <tr v-for="ds in dimSummaries" :key="ds.dimension + '-' + ds.modelConfigId">
                 <td>{{ ds.dimension }}</td>
                 <td>{{ getModelName(ds.modelConfigId) }}</td>
-                <td class="c"><span class="badge badge-g">{{ ds.totalCount - ds.badcaseCount }}</span></td>
+                <td class="c"><span class="badge badge-g">{{ ds.goodCount ?? (ds.totalCount - ds.badcaseCount) }}</span></td>
                 <td class="c"><span class="badge badge-r">{{ ds.badcaseCount }}</span></td>
+                <td class="c"><span class="badge badge-u">{{ ds.unknownCount || 0 }}</span></td>
                 <td class="c"><strong :style="{ color: ds.badcaseRate > 30 ? 'var(--red)' : ds.badcaseRate > 15 ? 'var(--yellow)' : 'var(--accent)' }">{{ (100 - ds.badcaseRate).toFixed(1) }}%</strong></td>
                 <td>
                   <div class="hbar">
-                    <div class="hbar-good" :style="{ width: (100 - ds.badcaseRate) + '%' }">{{ Math.round(100 - ds.badcaseRate) }}%</div>
+                    <div class="hbar-good" :style="{ width: goodPct(ds) + '%' }">{{ Math.round(goodPct(ds)) }}%</div>
                     <div class="hbar-bad" :style="{ width: ds.badcaseRate + '%' }">{{ ds.badcaseCount }}</div>
+                    <div class="hbar-unk" v-if="(ds.unknownCount || 0) > 0" :style="{ width: unkPct(ds) + '%' }">{{ Math.round(unkPct(ds)) }}%</div>
                   </div>
                 </td>
                 <td>
@@ -201,14 +207,15 @@
               <el-radio-button label="">全部 {{ judgeResults.length }}</el-radio-button>
               <el-radio-button label="bad">Badcase {{ badcaseCount }}</el-radio-button>
               <el-radio-button label="good">Goodcase {{ goodcaseCount }}</el-radio-button>
+              <el-radio-button label="unknown">Unknown {{ unknownCount }}</el-radio-button>
             </el-radio-group>
           </div>
           <div class="bc-card" v-for="(jr, i) in filteredJudgeResults" :key="jr.id">
             <div class="bc-head">
               <span class="bc-seq">#{{ i + 1 }}</span>
               <span class="bc-model">{{ jr.modelName || getModelName(jr.modelConfigId) }}</span>
-              <span :class="['bc-status', jr.isBadcase === 1 ? 'bc-bad' : 'bc-good']">
-                {{ jr.isBadcase === 1 ? 'Badcase' : 'Goodcase' }}
+              <span :class="['bc-status', jr.isBadcase === 1 ? 'bc-bad' : jr.isBadcase === 0 ? 'bc-good' : 'bc-unk']">
+                {{ jr.isBadcase === 1 ? 'Badcase' : jr.isBadcase === 0 ? 'Goodcase' : (jr.judgeStatus === 'SKIP' ? '解析失败' : 'Unknown') }}
               </span>
               <div class="bc-dims" v-if="jr.isBadcase === 1">
                 <span class="dim-badge" v-for="d in parseDims(jr.dimensions)" :key="d">{{ d }}</span>
@@ -270,12 +277,18 @@ export default {
     const overallRows = computed(() => summaries.value.filter(s => !s.dimension))
     const overall = computed(() => {
       const rows = overallRows.value
-      if (!rows.length) return { totalCount: 0, badcaseCount: 0, badcaseRate: 0, goodCount: 0, goodRate: 0 }
-      // 合并多模型
+      if (!rows.length) return { totalCount: 0, badcaseCount: 0, badcaseRate: 0, goodCount: 0, goodRate: 0, unknownCount: 0, unknownRate: 0 }
+      // 合并多模型（三态：good / bad / unknown）
       const total = rows.reduce((a, s) => a + (s.totalCount || 0), 0)
       const bad = rows.reduce((a, s) => a + (s.badcaseCount || 0), 0)
+      const good = rows.reduce((a, s) => a + (s.goodCount ?? (s.totalCount - s.badcaseCount)), 0)
+      const unknown = total - good - bad
       const rate = total > 0 ? +(bad * 100 / total).toFixed(1) : 0
-      return { totalCount: total, badcaseCount: bad, badcaseRate: rate, goodCount: total - bad, goodRate: (total ? ((total - bad) * 100 / total).toFixed(1) : 0) }
+      return {
+        totalCount: total, badcaseCount: bad, badcaseRate: rate,
+        goodCount: good, goodRate: total ? (good * 100 / total).toFixed(1) : 0,
+        unknownCount: unknown, unknownRate: total ? (unknown * 100 / total).toFixed(1) : 0
+      }
     })
 
     const dimSummaries = computed(() => summaries.value.filter(s => s.dimension).sort((a, b) => b.badcaseRate - a.badcaseRate))
@@ -284,13 +297,26 @@ export default {
 
     const badcaseCount = computed(() => judgeResults.value.filter(jr => jr.isBadcase === 1).length)
     const goodcaseCount = computed(() => judgeResults.value.filter(jr => jr.isBadcase === 0).length)
+    const unknownCount = computed(() => judgeResults.value.filter(jr => jr.isBadcase == null).length)
     const filteredJudgeResults = computed(() => {
       let list = judgeResults.value
       if (resultFilter.value === 'bad') list = list.filter(jr => jr.isBadcase === 1)
       else if (resultFilter.value === 'good') list = list.filter(jr => jr.isBadcase === 0)
+      else if (resultFilter.value === 'unknown') list = list.filter(jr => jr.isBadcase == null)
       return list.slice(0, 50)
     })
     const parseDims = (dims) => { try { return JSON.parse(dims || '[]') } catch { return [] } }
+    // 三态占比 helper（good/bad/unknown 平分 total）
+    const goodPct = (s) => {
+      const t = s.totalCount || 0
+      const g = s.goodCount ?? (t - s.badcaseCount)
+      return t ? +(g * 100 / t) : 0
+    }
+    const unkPct = (s) => {
+      const t = s.totalCount || 0
+      const u = s.unknownCount || 0
+      return t ? +(u * 100 / t) : 0
+    }
 
     // 从 extraFields JSON 中提取可读的问题和回答
     const extractCaseInfo = (jr) => {
@@ -322,11 +348,11 @@ export default {
       }
     }
     const statusClass = (s) => {
-      const map = { PENDING: 'pend', RUNNING: 'run', COMPLETED: 'done', FAILED: 'fail' }
+      const map = { PENDING: 'pend', RUNNING: 'run', COMPLETED: 'done', FAILED: 'fail', CANCELLED: 'fail' }
       return map[s] || 'pend'
     }
     const statusLabel = (s) => {
-      const map = { PENDING: '待启动', RUNNING: '运行中', COMPLETED: '已完成', FAILED: '失败' }
+      const map = { PENDING: '待启动', RUNNING: '运行中', COMPLETED: '已完成', FAILED: '失败', CANCELLED: '已取消' }
       return map[s] || s
     }
     const currentTask = computed(() => tasks.value.find(t => t.id === selectedTaskId.value) || null)
@@ -436,7 +462,8 @@ export default {
       barRef, tasks, selectedTaskId, task, summaries,
       modelNames, promptNames, overall, overallRows, dimSummaries, worstDim, bestDim,
       getDimClass, getModelName, getPromptName, loadData, goBadcase,
-      judgeResults, resultFilter, filteredJudgeResults, badcaseCount, goodcaseCount, parseDims, extractCaseInfo,
+      judgeResults, resultFilter, filteredJudgeResults, badcaseCount, goodcaseCount, unknownCount, parseDims, extractCaseInfo,
+      goodPct, unkPct,
       downloadReport, statusClass, statusLabel, currentTask, onSelectTask, loadingData,
       // 模型对比
       compareGroups, compareTotal, loadMoreCompare
@@ -446,7 +473,7 @@ export default {
 </script>
 
 <style scoped>
-.page { max-width:1280px; margin:0 auto; padding:28px 20px; font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif; background:var(--bg-root); color:var(--text-prime); line-height:1.6; font-size:14px; }
+.page { max-width:1360px; margin:0 auto; padding:28px 20px; font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif; background:var(--bg-root); color:var(--text-prime); line-height:1.6; font-size:14px; }
 .report-header { background:linear-gradient(135deg,#10b981,#059669); border-radius:16px; padding:32px 36px; margin-bottom:24px; color:#fff; }
 .header-actions { display:flex; align-items:center; gap:6px; margin-top:8px; flex-wrap:wrap; }
 .download-btn { margin-left:auto; }
@@ -545,9 +572,11 @@ export default {
 .ind-table tbody tr:hover { background:var(--bg-card-hover); }
 .badge { display:inline-block; padding:2px 8px; border-radius:20px; font-size:11px; font-weight:600; }
 .badge-g { background:var(--accent-soft); color:var(--accent); } .badge-r { background:var(--red-soft); color:var(--red); }
-.hbar { display:flex; height:20px; border-radius:5px; overflow:hidden; background:var(--bg-input); min-width:120px; }
+.badge-u { background:var(--yellow-soft); color:var(--yellow); }
+.hbar { display:flex; height:20px; border-radius:5px; overflow:hidden; background:var(--bg-input); min-width:140px; }
 .hbar-good { background:var(--accent); display:flex; align-items:center; justify-content:flex-end; padding-right:5px; color:var(--accent-text); font-size:11px; font-weight:600; }
 .hbar-bad { background:var(--red); display:flex; align-items:center; padding-left:4px; color:#fff; font-size:11px; font-weight:600; opacity:0.85; }
+.hbar-unk { background:var(--yellow); display:flex; align-items:center; justify-content:center; color:#fff; font-size:11px; font-weight:600; }
 .bc-card { border:1px solid var(--border); border-radius:10px; margin-bottom:8px; overflow:hidden; background:var(--bg-card); }
 .bc-head { background:var(--bg-input); padding:9px 14px; display:flex; align-items:center; gap:10px; flex-wrap: wrap; }
 .bc-seq { font-size:11px; color:var(--text-mute); font-weight:500; white-space:nowrap; }
@@ -555,6 +584,7 @@ export default {
 .bc-status { font-size:11px; font-weight:600; padding:2px 8px; border-radius:20px; }
 .bc-status.bc-bad { background:var(--red-soft); color:var(--red); }
 .bc-status.bc-good { background:var(--accent-soft); color:var(--accent); }
+.bc-status.bc-unk { background:var(--yellow-soft); color:var(--yellow); }
 .bc-dims { display: flex; gap: 4px; flex-wrap: wrap; }
 .dim-badge { display:inline-block; background:var(--accent-soft); color:var(--accent); border-radius:20px; padding:2px 8px; font-size:11px; font-weight:600; }
 .bc-body { padding:9px 14px; font-size:12px; color:var(--text-sec); line-height:1.7; border-top:1px solid var(--border); }
@@ -687,11 +717,13 @@ export default {
 }
 .cmp-cell.bad { border-color: rgba(239,68,68,0.35); }
 .cmp-cell.good { border-color: rgba(16,185,129,0.35); }
+.cmp-cell.unk { border-color: rgba(245,158,11,0.4); }
 .cmp-cell-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
 .cmp-model { font-size: 12px; font-weight: 700; color: var(--accent); }
 .cmp-status { font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 20px; }
 .cmp-status.bad { background: var(--red-soft); color: var(--red); }
 .cmp-status.good { background: var(--accent-soft); color: var(--accent); }
+.cmp-status.unk { background: rgba(245,158,11,0.15); color: #d97706; }
 .cmp-status.none { background: var(--bg-input); color: var(--text-mute); }
 .cmp-answer {
   font-size: 12px;

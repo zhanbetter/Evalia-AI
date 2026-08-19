@@ -199,11 +199,11 @@ export default {
       loadBadcases()
     }
     const statusClass = (s) => {
-      const map = { PENDING: 'pend', RUNNING: 'run', COMPLETED: 'done', FAILED: 'fail' }
+      const map = { PENDING: 'pend', RUNNING: 'run', COMPLETED: 'done', FAILED: 'fail', CANCELLED: 'fail' }
       return map[s] || 'pend'
     }
     const statusLabel = (s) => {
-      const map = { PENDING: '待启动', RUNNING: '运行中', COMPLETED: '已完成', FAILED: '失败' }
+      const map = { PENDING: '待启动', RUNNING: '运行中', COMPLETED: '已完成', FAILED: '失败', CANCELLED: '已取消' }
       return map[s] || s
     }
     const currentTask = computed(() => tasks.value.find(t => t.id === selectedTaskId.value) || null)
@@ -239,7 +239,7 @@ export default {
 </script>
 
 <style scoped>
-.page { max-width:1280px; margin:0 auto; padding:28px 20px; font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif; background:var(--bg-root); color:var(--text-prime); line-height:1.6; font-size:14px; }
+.page { max-width:1360px; margin:0 auto; padding:28px 20px; font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif; background:var(--bg-root); color:var(--text-prime); line-height:1.6; font-size:14px; }
 .report-header { background:linear-gradient(135deg,#10b981,#059669); border-radius:16px; padding:32px 36px; margin-bottom:24px; color:#fff; }
 .report-header h1 { font-size:22px; font-weight:700; margin-bottom:4px; }
 .report-header .meta { font-size:13px; opacity:.8; margin-top:6px; }

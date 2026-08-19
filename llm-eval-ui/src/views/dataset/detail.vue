@@ -61,6 +61,9 @@
       <el-tab-pane label="数据条目" name="data" class="data-tab-pane">
         <div class="data-tab-toolbar" style="margin-bottom: 14px; display: flex; align-items: center; gap: 12px">
           <el-button type="primary" size="small" @click="openAddItem">添加条目</el-button>
+          <el-button size="small" type="warning" plain @click="showDuplicateDialog = true; dupDetectResult = null">
+            <el-icon style="margin-right:4px"><Connection /></el-icon>重复检测
+          </el-button>
           <el-input v-model="searchKeyword" placeholder="搜索..." size="small" style="width: 240px" clearable @clear="loadItems" @keyup.enter="loadItems" />
           <el-button size="small" type="primary" plain @click="loadItems">搜索</el-button>
         </div>
@@ -169,6 +172,56 @@
         </el-dialog>
       </el-tab-pane>
 
+      <!-- 重复检测弹窗 -->
+      <el-dialog v-model="showDuplicateDialog" title="重复检测" width="860px" :close-on-click-modal="false" top="5vh">
+        <div class="dup-config">
+          <div class="dup-config-row">
+            <span class="dup-label">检测字段</span>
+            <el-select v-model="dupFieldName" size="small" style="width: 200px">
+              <el-option v-for="sf in schemaFields" :key="sf.fieldName" :label="sf.displayName || sf.fieldName" :value="dupFieldNameValue(sf)" :disabled="sf.role === 'CUSTOM'" />
+            </el-select>
+            <span class="dup-label" style="margin-left:20px">相似度阈值</span>
+            <el-slider v-model="dupThreshold" :min="0.5" :max="1" :step="0.05" style="width: 200px; margin-left: 8px" :format-tooltip="v => v.toFixed(2)" />
+            <span class="dup-thresh-val">{{ dupThreshold.toFixed(2) }}</span>
+            <el-button type="primary" size="small" :loading="dupLoading" @click="runDuplicateDetect" style="margin-left: 16px">
+              <el-icon style="margin-right:3px"><VideoPlay /></el-icon>开始检测
+            </el-button>
+          </div>
+        </div>
+        <div v-if="dupDetectResult" class="dup-result">
+          <div class="dup-summary">
+            <span>共检测 <b>{{ dupDetectResult.totalItems }}</b> 条数据</span>
+            <span style="margin-left:16px">发现 <b style="color:var(--red)">{{ dupDetectResult.groups?.length || 0 }}</b> 组重复</span>
+            <span style="margin-left:16px">涉及 <b style="color:var(--orange)">{{ dupDetectResult.duplicateCount || 0 }}</b> 条数据</span>
+          </div>
+          <div v-if="!dupDetectResult.groups?.length" class="dup-empty">未发现重复数据</div>
+          <div v-else class="dup-groups">
+            <div v-for="(group, gi) in dupDetectResult.groups" :key="gi" class="dup-group-card">
+              <div class="dup-group-header">
+                <span class="dup-group-title">重复组 {{ gi + 1 }}（{{ group.items.length }} 条，最高相似度 {{ (group.maxSimilarity * 100).toFixed(0) }}%）</span>
+                <el-checkbox v-model="group._allSelected" :indeterminate="group._indeterminate" @change="(val) => toggleGroupAll(group, val)">全选删除</el-checkbox>
+              </div>
+              <div class="dup-group-items">
+                <div v-for="(item, ii) in group.items" :key="item.id" class="dup-item-row" :class="{ 'dup-item-keep': ii === 0 && !item._selected }">
+                  <el-checkbox v-model="item._selected" @change="updateGroupState(group)" />
+                  <span class="dup-item-seq">#{{ item.seqNo }}</span>
+                  <span class="dup-item-text">{{ item.fieldValue }}</span>
+                  <span v-if="ii === 0" class="dup-item-badge keep">保留（代表）</span>
+                  <span v-else class="dup-item-badge sim">{{ (item.similarity * 100).toFixed(0) }}% 相似</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <template #footer v-if="dupDetectResult?.groups?.length">
+          <span class="dup-del-hint">已选 <b>{{ dupSelectedCount }}</b> 条待删除</span>
+          <el-button @click="showDuplicateDialog = false">取消</el-button>
+          <el-button type="danger" :loading="dupDeleting" :disabled="dupSelectedCount === 0" @click="batchDeleteDuplicates">
+            <el-icon style="margin-right:3px"><Delete /></el-icon>删除选中（{{ dupSelectedCount }}）
+          </el-button>
+        </template>
+      </el-dialog>
+
       <!-- 评测历史 Tab -->
       <el-tab-pane label="评测历史" name="eval-history">
         <div class="eval-history-hint" v-if="evalHistory.length">
@@ -209,7 +262,7 @@
 </template>
 
 <script>
-import { ref, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { datasetApi } from '../../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -269,11 +322,81 @@ export default {
     }
 
     const statusLabel = (s) => {
-      const map = { PENDING: '待启动', RUNNING: '运行中', COMPLETED: '已完成', FAILED: '失败' }
+      const map = { PENDING: '待启动', RUNNING: '运行中', COMPLETED: '已完成', FAILED: '失败', CANCELLED: '已取消' }
       return map[s] || s || '-'
     }
     const goEvalHistory = (taskId) => {
       router.push({ path: '/analysis', query: { taskId, view: 'overview' } })
+    }
+
+    // ===== 重复检测 =====
+    const showDuplicateDialog = ref(false)
+    const dupFieldName = ref('question')
+    const dupThreshold = ref(0.8)
+    const dupLoading = ref(false)
+    const dupDetectResult = ref(null)
+    const dupDeleting = ref(false)
+
+    const dupFieldNameValue = (sf) => {
+      const map = { QUESTION: 'question', REFERENCE: 'referenceAnswer', CONTEXT: 'context', CATEGORY: 'category' }
+      return map[sf.role] || ''
+    }
+
+    const runDuplicateDetect = async () => {
+      if (!dupFieldName.value) { ElMessage.warning('请选择检测字段'); return }
+      dupLoading.value = true
+      try {
+        const res = await datasetApi.detectDuplicates(datasetId.value, dupFieldName.value, dupThreshold.value)
+        dupDetectResult.value = res.data
+        // 初始化选中状态：每组第一条默认保留，其余默认选中删除
+        if (res.data.groups) {
+          res.data.groups.forEach(g => {
+            g._allSelected = false
+            g._indeterminate = false
+            g.items.forEach((item, i) => { item._selected = i > 0 })
+          })
+        }
+      } catch (e) { ElMessage.error('检测失败') }
+      finally { dupLoading.value = false }
+    }
+
+    const toggleGroupAll = (group, val) => {
+      group.items.forEach(item => { item._selected = val })
+      group._indeterminate = false
+    }
+
+    const updateGroupState = (group) => {
+      const sel = group.items.filter(i => i._selected).length
+      group._allSelected = sel === group.items.length
+      group._indeterminate = sel > 0 && sel < group.items.length
+    }
+
+    const dupSelectedCount = computed(() => {
+      if (!dupDetectResult.value?.groups) return 0
+      let count = 0
+      dupDetectResult.value.groups.forEach(g => {
+        g.items.forEach(item => { if (item._selected) count++ })
+      })
+      return count
+    })
+
+    const batchDeleteDuplicates = async () => {
+      const count = dupSelectedCount.value
+      if (count === 0) { ElMessage.warning('请至少选择一条数据删除'); return }
+      const ids = []
+      dupDetectResult.value.groups.forEach(g => {
+        g.items.forEach(item => { if (item._selected) ids.push(item.id) })
+      })
+      await ElMessageBox.confirm(`确定删除选中的 ${ids.length} 条重复数据？此操作不可恢复。`, '批量删除', { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' })
+      dupDeleting.value = true
+      try {
+        await datasetApi.batchDeleteItems(datasetId.value, ids)
+        ElMessage.success(`已删除 ${ids.length} 条数据`)
+        showDuplicateDialog.value = false
+        loadItems()
+        loadDataset()
+      } catch (e) { ElMessage.error('删除失败') }
+      finally { dupDeleting.value = false }
     }
 
     const loadDataset = async () => {
@@ -498,7 +621,9 @@ export default {
       showNewVersionDialog, newVersionStep, newVersionDesc, nvFile, nvUploadRef, nvPreviewing, nvUploading,
       nvMappingFields, nvPreviewData, handleNvFileChange, handleNvFileExceed, previewNewVersion, submitNewVersion,
       formatFileSize,
-      evalHistory, evalHistoryLoading, statusLabel, goEvalHistory
+      evalHistory, evalHistoryLoading, statusLabel, goEvalHistory,
+      showDuplicateDialog, dupFieldName, dupThreshold, dupLoading, dupDetectResult, dupDeleting,
+      dupFieldNameValue, runDuplicateDetect, toggleGroupAll, updateGroupState, dupSelectedCount, batchDeleteDuplicates
     }
   }
 }
@@ -583,4 +708,28 @@ export default {
 .nv-file-select { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .nv-file-name { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--accent); font-weight: 600; }
 .nv-file-hint { font-size: 12px; color: var(--text-mute); }
+
+/* 重复检测 */
+.dup-config { margin-bottom: 16px; }
+.dup-config-row { display: flex; align-items: center; gap: 0; flex-wrap: wrap; }
+.dup-label { font-size: 13px; font-weight: 600; color: var(--text-sec); white-space: nowrap; }
+.dup-thresh-val { font-size: 13px; font-weight: 700; color: var(--accent); min-width: 32px; text-align: center; }
+.dup-result { border-top: 1px solid var(--border); padding-top: 14px; }
+.dup-summary { font-size: 13px; color: var(--text-sec); margin-bottom: 12px; }
+.dup-summary b { font-weight: 700; }
+.dup-empty { text-align: center; padding: 32px 0; color: var(--text-mute); font-size: 14px; }
+.dup-groups { max-height: 460px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.dup-group-card { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.dup-group-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.dup-group-title { font-size: 13px; font-weight: 600; color: var(--text-prime); }
+.dup-group-items { display: flex; flex-direction: column; gap: 4px; }
+.dup-item-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 6px; background: var(--bg-input); font-size: 12px; }
+.dup-item-row.dup-item-keep { background: rgba(16, 185, 129, 0.06); border: 1px solid rgba(16, 185, 129, 0.2); }
+.dup-item-seq { font-family: monospace; color: var(--text-mute); min-width: 40px; }
+.dup-item-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-prime); }
+.dup-item-badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; white-space: nowrap; flex-shrink: 0; }
+.dup-item-badge.keep { background: var(--accent-soft); color: var(--accent); }
+.dup-item-badge.sim { background: rgba(249, 115, 22, 0.1); color: #f97316; }
+.dup-del-hint { margin-right: 12px; font-size: 13px; color: var(--text-sec); }
+.dup-del-hint b { color: var(--red); font-weight: 700; }
 </style>

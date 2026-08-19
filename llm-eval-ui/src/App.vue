@@ -32,6 +32,17 @@
             <span class="nav-label">{{ item.label }}</span>
           </div>
         </router-link>
+
+        <div class="nav-group-label" v-show="!collapsed">评测跟踪</div>
+
+        <router-link v-for="item in navItems.tertiary" :key="item.to" :to="item.to" class="nav-item" v-slot="{ isActive }">
+          <div :class="['nav-pill', { active: isActive }]">
+            <span class="nav-icon" :style="{ background: isActive ? item.grad : item.gradDim, color: isActive ? '#fff' : item.color }">
+              <el-icon :size="16"><component :is="item.icon" /></el-icon>
+            </span>
+            <span class="nav-label">{{ item.label }}</span>
+          </div>
+        </router-link>
       </nav>
 
       <div class="side-footer">
@@ -70,6 +81,9 @@ export default {
         ],
         secondary: [
           { to: '/analysis', label: '结果分析', icon: 'DataAnalysis', color: '#06b6d4', grad: 'linear-gradient(135deg,#06b6d4,#0891b2)', gradDim: 'rgba(6,182,212,0.12)' }
+        ],
+        tertiary: [
+          { to: '/knowledge', label: '评测知识', icon: 'Reading', color: '#8b5cf6', grad: 'linear-gradient(135deg,#8b5cf6,#7c3aed)', gradDim: 'rgba(139,92,246,0.12)' }
         ]
       }
     }
@@ -359,7 +373,7 @@ html, body, #app {
   height: 100%;
   padding: 20px;
   /* 固定宽度：宽屏稳定不变，窄屏最多占满可用区域 */
-  width: 1280px;
+  width: 1360px;
   max-width: 100%;
   margin: 0 auto;
   display: flex;
@@ -723,12 +737,12 @@ html, body, #app {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   font-size: 14px;
   line-height: 1.5;
-  max-width: 1280px;
+  max-width: 1360px;
   margin: 0 auto;
   padding: 20px;
 }
 .theme-dark .page {
-  max-width: 1280px;
+  max-width: 1360px;
   margin: 0 auto;
   padding: 20px;
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -739,7 +753,7 @@ html, body, #app {
 /* 统一 result/badcase 页面容器：宽度与主区一致、高度撑满、内部滚动 */
 .page {
   width: 100%;
-  max-width: 1280px;
+  max-width: 1360px;
   margin: 0 auto;
   height: 100%;
   overflow-y: auto;

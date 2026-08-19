@@ -48,7 +48,7 @@
             <span>{{ t.progress || getProgress(t.id) || 0 }}%</span>
           </div>
           <el-progress :percentage="t.progress || getProgress(t.id) || 0" :stroke-width="8"
-            :status="t.status === 'COMPLETED' ? 'success' : t.status === 'FAILED' ? 'exception' : ''"
+            :status="t.status === 'COMPLETED' ? 'success' : (t.status === 'FAILED' || t.status === 'CANCELLED') ? 'exception' : ''"
             :color="t.status === 'RUNNING' ? '#f59e0b' : undefined" />
         </div>
 
@@ -125,11 +125,11 @@ export default {
     const datasetName = (id) => datasetMap.value[id] || `数据集#${id}`
 
     const statusClass = (status) => {
-      const map = { PENDING: 'pend', RUNNING: 'run', COMPLETED: 'done', FAILED: 'fail' }
+      const map = { PENDING: 'pend', RUNNING: 'run', COMPLETED: 'done', FAILED: 'fail', CANCELLED: 'fail' }
       return map[status] || 'pend'
     }
     const statusLabel = (status) => {
-      const map = { PENDING: '待启动', RUNNING: '运行中', COMPLETED: '已完成', FAILED: '失败' }
+      const map = { PENDING: '待启动', RUNNING: '运行中', COMPLETED: '已完成', FAILED: '失败', CANCELLED: '已取消' }
       return map[status] || status
     }
 

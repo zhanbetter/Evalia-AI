@@ -109,8 +109,8 @@ export default {
       ).sort((a, b) => b.version - a.version)
     })
     const promptNames = computed(() => '')
-    const statusClass = (s) => ({ PENDING: 'pend', RUNNING: 'run', COMPLETED: 'done', FAILED: 'fail' }[s] || 'pend')
-    const statusLabel = (s) => ({ PENDING: '待启动', RUNNING: '运行中', COMPLETED: '已完成', FAILED: '失败' }[s] || s)
+    const statusClass = (s) => ({ PENDING: 'pend', RUNNING: 'run', COMPLETED: 'done', FAILED: 'fail', CANCELLED: 'fail' }[s] || 'pend')
+    const statusLabel = (s) => ({ PENDING: '待启动', RUNNING: '运行中', COMPLETED: '已完成', FAILED: '失败', CANCELLED: '已取消' }[s] || s)
 
     const loadTasks = async () => {
       const res = await taskApi.list(1, 100)
@@ -173,7 +173,7 @@ export default {
 </script>
 
 <style scoped>
-.analysis-page { max-width: 1280px; margin: 0 auto; padding: 24px 20px; font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif; background: var(--bg-root); color: var(--text-prime); line-height: 1.6; }
+.analysis-page { max-width: 1360px; margin: 0 auto; padding: 24px 20px; font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif; background: var(--bg-root); color: var(--text-prime); line-height: 1.6; }
 .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; padding: 10px 14px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-sm); }
 .toolbar-left { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
 .toolbar-right { flex-shrink: 0; display: flex; align-items: center; gap: 8px; }
