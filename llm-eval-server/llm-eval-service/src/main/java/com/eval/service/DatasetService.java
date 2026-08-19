@@ -54,6 +54,9 @@ public interface DatasetService {
     /** 删除条目 */
     void deleteItem(Long itemId);
 
+    /** 批量删除条目 */
+    void batchDeleteItems(Long datasetId, List<Long> itemIds);
+
     /** 获取数据集版本列表 */
     List<EvalDataset> listVersions(String name);
 

@@ -48,6 +48,12 @@ public class PromptController {
         return Result.success(promptService.getById(id));
     }
 
+    /** 评估器版本历史（快照列表，新版本在前） */
+    @GetMapping("/{id}/versions")
+    public Result<java.util.List<com.eval.model.entity.EvalPromptVersion>> listVersions(@PathVariable Long id) {
+        return Result.success(promptService.listVersions(id));
+    }
+
     /** 解析Prompt模板中的占位符，支持 ${xxx} 和 {xxx} 两种格式 */
     @GetMapping("/parse-placeholders")
     public Result<java.util.List<String>> parsePlaceholders(@RequestParam String template) {

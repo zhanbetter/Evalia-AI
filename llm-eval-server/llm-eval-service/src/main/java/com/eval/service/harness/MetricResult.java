@@ -14,8 +14,8 @@ public class MetricResult {
     /** 分数/等级（Integer / String / Boolean） */
     private Object score;
 
-    /** 是否判定为 badcase */
-    private boolean badcase;
+    /** 是否判定为 badcase；null=unknown（AI 无法判断该维度） */
+    private Boolean badcase;
 
     /** 判定理由 */
     private String reason;
@@ -23,7 +23,7 @@ public class MetricResult {
     public MetricResult() {
     }
 
-    public MetricResult(String metricName, Object score, boolean badcase, String reason) {
+    public MetricResult(String metricName, Object score, Boolean badcase, String reason) {
         this.metricName = metricName;
         this.score = score;
         this.badcase = badcase;

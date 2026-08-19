@@ -49,8 +49,7 @@ public class DatasetServiceImpl implements DatasetService {
         ROLE_HINTS.put("query", "QUESTION"); ROLE_HINTS.put("input", "QUESTION");
         ROLE_HINTS.put("prompt", "QUESTION"); ROLE_HINTS.put("输入", "QUESTION");
         ROLE_HINTS.put("reference_answer", "REFERENCE"); ROLE_HINTS.put("参考答案", "REFERENCE");
-        ROLE_HINTS.put("answer", "REFERENCE"); ROLE_HINTS.put("参考", "REFERENCE");
-        ROLE_HINTS.put("回复", "REFERENCE"); ROLE_HINTS.put("response", "REFERENCE");
+        ROLE_HINTS.put("参考", "REFERENCE");
         ROLE_HINTS.put("context", "CONTEXT"); ROLE_HINTS.put("上下文", "CONTEXT");
         ROLE_HINTS.put("人设", "CONTEXT"); ROLE_HINTS.put("背景", "CONTEXT");
         ROLE_HINTS.put("background", "CONTEXT"); ROLE_HINTS.put("persona", "CONTEXT");
@@ -113,17 +112,15 @@ public class DatasetServiceImpl implements DatasetService {
                     }
                 }
             } else {
-                // CSV
+                // CSV - 支持含逗号/引号的字段
                 String content = new String(is.readAllBytes(), "UTF-8");
-                String[] lines = content.split("\n");
-                if (lines.length == 0) throw new BusinessException("CSV文件无数据");
-                String[] headers = lines[0].trim().split(",", -1);
+                List<String[]> allRows = parseCsvLines(content);
+                if (allRows.isEmpty()) throw new BusinessException("CSV文件无数据");
+                String[] headers = allRows.get(0);
                 for (String h : headers) columns.add(h.trim());
-                int max = Math.min(lines.length, 6);
+                int max = Math.min(allRows.size(), 6);
                 for (int i = 1; i < max; i++) {
-                    String line = lines[i].trim();
-                    if (StrUtil.isBlank(line)) continue;
-                    String[] parts = line.split(",", -1);
+                    String[] parts = allRows.get(i);
                     Map<String, String> rowData = new LinkedHashMap<>();
                     for (int j = 0; j < columns.size(); j++) {
                         rowData.put(columns.get(j), j < parts.length ? parts[j].trim() : "");
@@ -354,6 +351,18 @@ public class DatasetServiceImpl implements DatasetService {
     }
 
     @Override
+    @Transactional
+    public void batchDeleteItems(Long datasetId, List<Long> itemIds) {
+        if (itemIds == null || itemIds.isEmpty()) return;
+        datasetItemMapper.deleteBatchIds(itemIds);
+        EvalDataset ds = datasetMapper.selectById(datasetId);
+        if (ds != null) {
+            ds.setTotalCount(Math.max(0, ds.getTotalCount() - itemIds.size()));
+            datasetMapper.updateById(ds);
+        }
+    }
+
+    @Override
     public List<EvalDatasetItem> batchGetItems(List<Long> ids) {
         if (ids == null || ids.isEmpty()) return List.of();
         return datasetItemMapper.selectBatchIds(ids);
@@ -376,8 +385,6 @@ public class DatasetServiceImpl implements DatasetService {
 
         // 批量加载关联数据，避免 N+1
         Set<Long> taskIds = tasks.stream().map(EvalTask::getId).collect(Collectors.toSet());
-        Set<Long> modelIds = tasks.stream().map(EvalTask::getDatasetId).collect(Collectors.toSet());
-        Set<Long> promptIds = tasks.stream().map(EvalTask::getDatasetId).collect(Collectors.toSet());
 
         // 任务-模型关联
         List<EvalTaskModel> taskModels = taskModelMapper.selectList(new LambdaQueryWrapper<EvalTaskModel>()
@@ -484,13 +491,14 @@ public class DatasetServiceImpl implements DatasetService {
                     if (!isItemEmpty(item)) items.add(item);
                 }
             } else {
+                // CSV - 支持含逗号/引号的字段
                 String content = new String(is.readAllBytes(), "UTF-8");
-                String[] lines = content.split("\n");
-                String[] headers = lines[0].trim().split(",", -1);
-                for (int i = 1; i < lines.length; i++) {
-                    String line = lines[i].trim();
-                    if (StrUtil.isBlank(line)) continue;
-                    String[] parts = line.split(",", -1);
+                List<String[]> allRows = parseCsvLines(content);
+                if (allRows.isEmpty()) throw new BusinessException("CSV文件无数据");
+                String[] headers = allRows.get(0);
+                for (int i = 1; i < allRows.size(); i++) {
+                    String[] parts = allRows.get(i);
+                    if (parts == null || parts.length == 0) continue;
                     Map<String, String> m = new LinkedHashMap<>();
                     for (int j = 0; j < headers.length; j++) {
                         m.put(headers[j].trim(), j < parts.length ? parts[j].trim() : "");
@@ -584,7 +592,12 @@ public class DatasetServiceImpl implements DatasetService {
         if (cell == null) return "";
         switch (cell.getCellType()) {
             case STRING: return cell.getStringCellValue().trim();
-            case NUMERIC: return String.valueOf((long) cell.getNumericCellValue());
+            case NUMERIC: {
+                double d = cell.getNumericCellValue();
+                return d == Math.floor(d) && !Double.isInfinite(d)
+                        ? String.valueOf((long) d)
+                        : String.valueOf(d);
+            }
             case BOOLEAN: return String.valueOf(cell.getBooleanCellValue());
             default: return "";
         }
@@ -599,5 +612,60 @@ public class DatasetServiceImpl implements DatasetService {
         boolean extraEmpty = (item.getExtraFields() == null || item.getExtraFields().isEmpty()
                 || "{}".equals(item.getExtraFields()));
         return coreEmpty && extraEmpty;
+    }
+
+    /**
+     * 解析 CSV 文本为行数组，正确处理双引号包裹的字段（含逗号、换行、转义引号）
+     */
+    private List<String[]> parseCsvLines(String content) {
+        List<String[]> rows = new ArrayList<>();
+        List<String> currentRow = new ArrayList<>();
+        StringBuilder field = new StringBuilder();
+        boolean inQuotes = false;
+        for (int i = 0; i < content.length(); i++) {
+            char c = content.charAt(i);
+            if (inQuotes) {
+                if (c == '"') {
+                    // 看下一个字符是否也是引号（转义引号 ""）
+                    if (i + 1 < content.length() && content.charAt(i + 1) == '"') {
+                        field.append('"');
+                        i++; // 跳过下一个引号
+                    } else {
+                        inQuotes = false; // 引号结束
+                    }
+                } else {
+                    field.append(c);
+                }
+            } else {
+                if (c == '"') {
+                    inQuotes = true;
+                } else if (c == ',') {
+                    currentRow.add(field.toString());
+                    field.setLength(0);
+                } else if (c == '\n' || c == '\r') {
+                    // 处理 \r\n 和 \r
+                    if (c == '\r' && i + 1 < content.length() && content.charAt(i + 1) == '\n') {
+                        i++; // 跳过 \n
+                    }
+                    currentRow.add(field.toString());
+                    field.setLength(0);
+                    if (!currentRow.isEmpty()) {
+                        // 跳过全空行
+                        boolean allEmpty = currentRow.stream().allMatch(String::isEmpty);
+                        if (!allEmpty) rows.add(currentRow.toArray(new String[0]));
+                    }
+                    currentRow = new ArrayList<>();
+                } else {
+                    field.append(c);
+                }
+            }
+        }
+        // 最后一个字段/行
+        currentRow.add(field.toString());
+        if (!currentRow.isEmpty()) {
+            boolean allEmpty = currentRow.stream().allMatch(String::isEmpty);
+            if (!allEmpty) rows.add(currentRow.toArray(new String[0]));
+        }
+        return rows;
     }
 }

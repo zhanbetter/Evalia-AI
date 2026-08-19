@@ -64,7 +64,7 @@ public class LlmJudgeMetric implements Metric {
 
         // 4. 解析单维度结果
         PromptGenerator.DimensionResult dr = promptGenerator.parseDimensionResponse(aiResponse, dimension);
-        return new MetricResult(dimName, dr.getScore(), dr.isBadcase(), dr.getReason());
+        return new MetricResult(dimName, dr.getScore(), dr.getIsBadcase(), dr.getReason());
     }
 
     /**

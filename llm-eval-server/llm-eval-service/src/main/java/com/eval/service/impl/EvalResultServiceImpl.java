@@ -268,14 +268,19 @@ public class EvalResultServiceImpl implements EvalResultService {
                 new LambdaQueryWrapper<EvalTaskPrompt>().eq(EvalTaskPrompt::getTaskId, taskId));
         List<EvalTaskSummary> summaries = getSummary(taskId);
 
-        // 汇总数据
-        int totalCount = 0, badcaseCount = 0;
+        // 汇总数据（三态：goodcase / badcase / unknown）
+        int totalCount = 0, goodCount = 0, badcaseCount = 0, unknownCount = 0;
         for (EvalTaskSummary s : summaries) {
-            if (s.getDimension() == null) { totalCount += s.getTotalCount(); badcaseCount += s.getBadcaseCount(); }
+            if (s.getDimension() == null) {
+                totalCount += s.getTotalCount() != null ? s.getTotalCount() : 0;
+                goodCount += s.getGoodCount() != null ? s.getGoodCount() : 0;
+                badcaseCount += s.getBadcaseCount() != null ? s.getBadcaseCount() : 0;
+                unknownCount += s.getUnknownCount() != null ? s.getUnknownCount() : 0;
+            }
         }
         double badcaseRate = totalCount > 0 ? (badcaseCount * 100.0 / totalCount) : 0;
-        int goodCount = totalCount - badcaseCount;
         double goodRate = totalCount > 0 ? (goodCount * 100.0 / totalCount) : 0;
+        double unknownRate = totalCount > 0 ? (unknownCount * 100.0 / totalCount) : 0;
 
         // 维度汇总
         List<EvalTaskSummary> dimSums = summaries.stream()
@@ -364,10 +369,11 @@ public class EvalResultServiceImpl implements EvalResultService {
         sb.append(".ind-table tbody tr:last-child td{border-bottom:none}");
         sb.append(".ind-table tbody tr:hover{background:#fafbfd}");
         sb.append(".badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600}");
-        sb.append(".badge-g{background:var(--green-l);color:#15803d}.badge-r{background:var(--red-l);color:#b91c1c}");
-        sb.append(".hbar{display:flex;height:20px;border-radius:5px;overflow:hidden;background:#f3f4f6;min-width:120px}");
+        sb.append(".badge-g{background:var(--green-l);color:#15803d}.badge-r{background:var(--red-l);color:#b91c1c}.badge-u{background:#ffedd5;color:#c2410c}");
+        sb.append(".hbar{display:flex;height:20px;border-radius:5px;overflow:hidden;background:#f3f4f6;min-width:150px}");
         sb.append(".hbar-good{background:var(--green);display:flex;align-items:center;justify-content:flex-end;padding-right:5px;color:#fff;font-size:11px;font-weight:600}");
         sb.append(".hbar-bad{background:var(--red);display:flex;align-items:center;padding-left:4px;color:#fff;font-size:11px;font-weight:600}");
+        sb.append(".hbar-unk{background:var(--orange);display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:600}");
         sb.append(".bc-card{border:1px solid var(--border);border-radius:8px;margin-bottom:8px;overflow:hidden}");
         sb.append(".bc-head{background:#f8f9fb;padding:9px 14px;display:flex;align-items:flex-start;gap:10px}");
         sb.append(".bc-seq{font-size:11px;color:var(--text-sec);font-weight:500;white-space:nowrap;margin-top:1px}");
@@ -385,12 +391,12 @@ public class EvalResultServiceImpl implements EvalResultService {
                 .append(" · 评测Prompt：").append(esc(promptStr)).append("</div>");
         sb.append("<div>").append(modelTags).append("</div></div>");
 
-        // KPI
+        // KPI（三态）
         sb.append("<div class=\"kpi-row\">");
         sb.append(kpiCard("t", String.valueOf(totalCount), "总评测条数"));
         sb.append(kpiCard("g", String.valueOf(goodCount), "Goodcase（" + String.format("%.1f", goodRate) + "%）"));
         sb.append(kpiCard("b", String.valueOf(badcaseCount), "Badcase（" + String.format("%.1f", badcaseRate) + "%）"));
-        sb.append(kpiCard("r", String.format("%.1f", badcaseRate) + "%", "整体 Badcase 率"));
+        sb.append(kpiCard("r", String.valueOf(unknownCount), "Unknown（" + String.format("%.1f", unknownRate) + "%）"));
         sb.append("</div>");
 
         // 维度概览
@@ -400,11 +406,13 @@ public class EvalResultServiceImpl implements EvalResultService {
             for (EvalTaskSummary ds : dimSums) {
                 double adoptRate = 100 - ds.getBadcaseRate().doubleValue();
                 String cls = ds.getBadcaseRate().doubleValue() > 30 ? "bad-t" : ds.getBadcaseRate().doubleValue() > 15 ? "warn" : "best";
-                int good = ds.getTotalCount() - ds.getBadcaseCount();
+                int good = ds.getGoodCount() != null ? ds.getGoodCount() : ds.getTotalCount() - ds.getBadcaseCount();
+                int unknown = ds.getUnknownCount() != null ? ds.getUnknownCount() : 0;
                 sb.append("<div class=\"topic-card ").append(cls).append("\">");
                 sb.append("<div class=\"tc-name\">").append(esc(ds.getDimension())).append("</div>");
                 sb.append("<div class=\"tc-rate\">").append(String.format("%.1f", adoptRate)).append("%</div>");
-                sb.append("<div class=\"tc-sub\">采纳率 · ").append(good).append("/").append(ds.getTotalCount()).append(" Goodcase</div>");
+                sb.append("<div class=\"tc-sub\">采纳率 · ").append(good).append("/").append(ds.getTotalCount())
+                        .append(" Goodcase").append(unknown > 0 ? " · Unknown " + unknown : "").append("</div>");
                 sb.append("<div class=\"mini-bar\"><div class=\"mini-bar-fill\" style=\"width:").append(adoptRate).append("%\"></div></div>");
                 sb.append("</div>");
             }
@@ -427,27 +435,34 @@ public class EvalResultServiceImpl implements EvalResultService {
         if (!dimSums.isEmpty()) {
             sb.append("<div class=\"section\"><div class=\"sec-hd\"><h2>各指标 Badcase 率总览</h2></div><div class=\"sec-bd\">");
             sb.append("<table class=\"ind-table\"><thead><tr>");
-            sb.append("<th style=\"width:22%\">维度</th><th class=\"c\" style=\"width:10%\">Good</th><th class=\"c\" style=\"width:10%\">Bad</th>");
-            sb.append("<th class=\"c\" style=\"width:10%\">采纳率</th><th style=\"width:22%\">占比</th><th style=\"width:26%\">分布</th>");
+            sb.append("<th style=\"width:20%\">维度</th><th class=\"c\" style=\"width:9%\">Good</th><th class=\"c\" style=\"width:9%\">Bad</th><th class=\"c\" style=\"width:9%\">Unknown</th>");
+            sb.append("<th class=\"c\" style=\"width:9%\">采纳率</th><th style=\"width:22%\">占比</th><th style=\"width:22%\">分布</th>");
             sb.append("</tr></thead><tbody>");
 
             // 整体行
             sb.append("<tr><td><strong>整体</strong></td>");
             sb.append("<td class=\"c\"><span class=\"badge badge-g\">").append(goodCount).append("</span></td>");
             sb.append("<td class=\"c\"><span class=\"badge badge-r\">").append(badcaseCount).append("</span></td>");
+            sb.append("<td class=\"c\"><span class=\"badge badge-u\">").append(unknownCount).append("</span></td>");
             sb.append("<td class=\"c\"><strong style=\"color:#16a34a\">").append(String.format("%.1f", goodRate)).append("%</strong></td>");
-            sb.append("<td>").append(hbar(goodRate, badcaseRate, goodCount, badcaseCount)).append("</td><td></td></tr>");
+            sb.append("<td>").append(hbar(goodRate, badcaseRate, unknownRate, goodCount, badcaseCount, unknownCount)).append("</td><td></td></tr>");
 
             // 维度行
             for (EvalTaskSummary ds : dimSums) {
                 double adoptRate = 100 - ds.getBadcaseRate().doubleValue();
-                int good = ds.getTotalCount() - ds.getBadcaseCount();
+                int good = ds.getGoodCount() != null ? ds.getGoodCount() : ds.getTotalCount() - ds.getBadcaseCount();
+                int unknown = ds.getUnknownCount() != null ? ds.getUnknownCount() : 0;
+                int dimTotal = ds.getTotalCount() != null ? ds.getTotalCount() : 0;
+                double goodPct = dimTotal > 0 ? good * 100.0 / dimTotal : 0;
+                double badPct = ds.getBadcaseRate() != null ? ds.getBadcaseRate().doubleValue() : 0;
+                double unkPct = dimTotal > 0 ? unknown * 100.0 / dimTotal : 0;
                 String rateColor = ds.getBadcaseRate().doubleValue() > 30 ? "#dc2626" : ds.getBadcaseRate().doubleValue() > 15 ? "#ea580c" : "#16a34a";
                 sb.append("<tr><td>").append(esc(ds.getDimension())).append("</td>");
                 sb.append("<td class=\"c\"><span class=\"badge badge-g\">").append(good).append("</span></td>");
                 sb.append("<td class=\"c\"><span class=\"badge badge-r\">").append(ds.getBadcaseCount()).append("</span></td>");
+                sb.append("<td class=\"c\"><span class=\"badge badge-u\">").append(unknown).append("</span></td>");
                 sb.append("<td class=\"c\"><strong style=\"color:").append(rateColor).append("\">").append(String.format("%.1f", adoptRate)).append("%</strong></td>");
-                sb.append("<td>").append(hbar(adoptRate, ds.getBadcaseRate().doubleValue(), good, ds.getBadcaseCount())).append("</td>");
+                sb.append("<td>").append(hbar(goodPct, badPct, unkPct, good, ds.getBadcaseCount(), unknown)).append("</td>");
                 // 模型分布（用已批量加载的 modelNameMap，避免 N+1）
                 String dimDist = summaries.stream()
                         .filter(s -> s.getDimension() != null && s.getDimension().equals(ds.getDimension()))
@@ -488,9 +503,14 @@ public class EvalResultServiceImpl implements EvalResultService {
         return "<div class=\"kpi " + cls + "\"><div class=\"num\">" + num + "</div><div class=\"label\">" + label + "</div></div>";
     }
 
-    private String hbar(double goodPct, double badPct, int goodCount, int badCount) {
-        return "<div class=\"hbar\"><div class=\"hbar-good\" style=\"width:" + goodPct + "%\">" + Math.round(goodPct) + "%</div>"
-                + "<div class=\"hbar-bad\" style=\"width:" + badPct + "%\">" + badCount + "</div></div>";
+    private String hbar(double goodPct, double badPct, double unknownPct, int goodCount, int badCount, int unknownCount) {
+        String goodSeg = goodCount > 0
+                ? "<div class=\"hbar-good\" style=\"width:" + goodPct + "%\">" + Math.round(goodPct) + "%</div>" : "";
+        String badSeg = badCount > 0
+                ? "<div class=\"hbar-bad\" style=\"width:" + badPct + "%\">" + Math.round(badPct) + "%</div>" : "";
+        String unkSeg = unknownCount > 0
+                ? "<div class=\"hbar-unk\" style=\"width:" + unknownPct + "%\">" + Math.round(unknownPct) + "%</div>" : "";
+        return "<div class=\"hbar\">" + goodSeg + badSeg + unkSeg + "</div>";
     }
 
     private String esc(String s) {

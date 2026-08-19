@@ -45,6 +45,9 @@ public class EvalTask implements Serializable {
     /** 完成百分比 0-100 */
     private Integer progress;
 
+    /** 分片总数（大规模评测拆分后写入，小任务为0） */
+    private Integer shardCount;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdAt;
 

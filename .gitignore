@@ -24,6 +24,7 @@ logs/
 .codeflicker/
 .env
 .env.*
+!.env.prod.example
 *.local
 startRemaining.bat
 /start-dev.cmd

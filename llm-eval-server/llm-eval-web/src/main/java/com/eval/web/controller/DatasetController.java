@@ -3,11 +3,13 @@ package com.eval.web.controller;
 import com.eval.common.result.PageResult;
 import com.eval.common.result.Result;
 import com.eval.model.dto.DatasetItemDTO;
+import com.eval.model.dto.DuplicateDetectionResult;
 import com.eval.model.dto.SchemaFieldDTO;
 import com.eval.model.entity.EvalDataset;
 import com.eval.model.entity.EvalDatasetItem;
 import com.eval.model.entity.EvalDatasetSchema;
 import com.eval.service.DatasetService;
+import com.eval.service.DuplicateDetectionService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -24,6 +26,7 @@ import java.util.Map;
 public class DatasetController {
 
     private final DatasetService datasetService;
+    private final DuplicateDetectionService duplicateDetectionService;
 
     /** 上传预览：解析文件列名+前几行数据+推荐映射 */
     @PostMapping("/preview")
@@ -143,5 +146,21 @@ public class DatasetController {
     @GetMapping("/{id}/eval-history")
     public Result<List<com.eval.model.vo.DatasetEvalHistoryVO>> listEvalHistory(@PathVariable Long id) {
         return Result.success(datasetService.listEvalHistory(id));
+    }
+
+    /** 重复检测 */
+    @PostMapping("/{id}/detect-duplicates")
+    public Result<DuplicateDetectionResult> detectDuplicates(
+            @PathVariable Long id,
+            @RequestParam(defaultValue = "question") String fieldName,
+            @RequestParam(defaultValue = "0.8") double threshold) {
+        return Result.success(duplicateDetectionService.detect(id, fieldName, threshold));
+    }
+
+    /** 批量删除条目 */
+    @PostMapping("/{id}/items/batch-delete")
+    public Result<Void> batchDeleteItems(@PathVariable Long id, @RequestBody List<Long> itemIds) {
+        datasetService.batchDeleteItems(id, itemIds);
+        return Result.success();
     }
 }

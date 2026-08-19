@@ -38,6 +38,7 @@
         <hutool.version>5.8.25</hutool.version>
         <poi.version>5.2.5</poi.version>
         <lombok.version>1.18.36</lombok.version>
+        <jsoup.version>1.23.1</jsoup.version>
     </properties>
 
     <dependencyManagement>
@@ -102,6 +103,13 @@
                 <groupId>org.apache.poi</groupId>
                 <artifactId>poi-ooxml</artifactId>
                 <version>${poi.version}</version>
+            </dependency>
+
+            <!-- jsoup：HTML 解析 / 网页正文提取（GitHub 标准做法） -->
+            <dependency>
+                <groupId>org.jsoup</groupId>
+                <artifactId>jsoup</artifactId>
+                <version>${jsoup.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

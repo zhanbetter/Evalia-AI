@@ -3,6 +3,9 @@ package com.eval.service;
 import com.eval.common.result.PageResult;
 import com.eval.model.dto.PromptDTO;
 import com.eval.model.entity.EvalPrompt;
+import com.eval.model.entity.EvalPromptVersion;
+
+import java.util.List;
 
 public interface PromptService {
 
@@ -15,6 +18,9 @@ public interface PromptService {
     void deleteById(Long id);
 
     EvalPrompt getById(Long id);
+
+    /** 评估器版本历史（旧版本快照，新版本在前） */
+    List<EvalPromptVersion> listVersions(Long promptId);
 
     /**
      * AI 润色评估器维度配置

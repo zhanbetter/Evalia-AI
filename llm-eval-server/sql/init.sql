@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS eval_model_config (
 -- 评测Prompt（用户自定义，维度/标准/badcase定义全在这里）
 CREATE TABLE IF NOT EXISTS eval_prompt (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    version INT DEFAULT 1 COMMENT '版本号（更新时自动+1）',
     name VARCHAR(128) NOT NULL COMMENT 'Prompt名称',
     description VARCHAR(512) DEFAULT '' COMMENT '描述',
     prompt_template TEXT NOT NULL COMMENT '评测Prompt模板',
@@ -73,6 +74,20 @@ CREATE TABLE IF NOT EXISTS eval_prompt (
     status TINYINT DEFAULT 1 COMMENT '启用/禁用',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='评测Prompt';
+
+-- 评估器版本快照（每次更新时旧版本完整落一份，支持回溯与审计）
+CREATE TABLE IF NOT EXISTS eval_prompt_version (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    prompt_id BIGINT NOT NULL COMMENT '关联评估器ID',
+    version INT NOT NULL COMMENT '版本号',
+    name VARCHAR(128) NOT NULL COMMENT 'Prompt名称',
+    description VARCHAR(512) DEFAULT '' COMMENT '描述',
+    prompt_template TEXT NOT NULL COMMENT '评测Prompt模板',
+    dimensions_config TEXT NULL COMMENT '结构化维度配置JSON（含 strict_output）',
+    evaluation_mode VARCHAR(16) DEFAULT 'quality' COMMENT 'quality/reference',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_prompt_id (prompt_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='评估器版本快照';
 
 -- 评测任务
 CREATE TABLE IF NOT EXISTS eval_task (
@@ -99,11 +114,15 @@ CREATE TABLE IF NOT EXISTS eval_task_model (
     INDEX idx_task_id (task_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- 任务-评测Prompt关联
+-- 任务-评测Prompt关联（快照列：任务运行时冻结评估器版本，不受后续编辑影响）
 CREATE TABLE IF NOT EXISTS eval_task_prompt (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     task_id BIGINT NOT NULL,
     prompt_id BIGINT NOT NULL,
+    prompt_version INT DEFAULT NULL COMMENT '创建任务时评估器版本快照',
+    prompt_name VARCHAR(128) DEFAULT '' COMMENT '评估器名称快照',
+    prompt_template TEXT NULL COMMENT '评估Prompt模板快照',
+    dimensions_config TEXT NULL COMMENT '维度配置JSON快照（含 strict_output）',
     INDEX idx_task_id (task_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='任务-评测Prompt关联';
 
@@ -151,7 +170,9 @@ CREATE TABLE IF NOT EXISTS eval_task_summary (
     prompt_id BIGINT NOT NULL COMMENT '评测Prompt',
     dimension VARCHAR(128) NULL COMMENT '维度名称(NULL=整体)',
     total_count INT DEFAULT 0,
+    good_count INT DEFAULT 0 COMMENT 'goodcase数量',
     badcase_count INT DEFAULT 0,
+    unknown_count INT DEFAULT 0 COMMENT 'unknown数量(AI无法判定结论)',
     skip_count INT DEFAULT 0 COMMENT '无法判定数(AI输出无法解析)',
     badcase_rate DECIMAL(5,2) DEFAULT 0.00 COMMENT 'badcase率(%)',
     avg_latency_ms INT DEFAULT 0,
@@ -231,3 +252,38 @@ CREATE TABLE IF NOT EXISTS eval_gold_label (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY uk_gold (model_config_id, dataset_item_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='金标准（专家裁决后的最终结论）';
+
+-- ============================================================
+-- 评测知识文章
+-- ============================================================
+CREATE TABLE IF NOT EXISTS eval_article (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    title VARCHAR(500) NOT NULL COMMENT '文章标题',
+    source_name VARCHAR(200) COMMENT '来源团队/博客名',
+    source_url VARCHAR(1000) NOT NULL COMMENT '原文链接（去重用）',
+    author VARCHAR(200) COMMENT '作者',
+    tags VARCHAR(500) COMMENT '标签，逗号分隔',
+    summary TEXT COMMENT 'AI 生成摘要',
+    content LONGTEXT COMMENT '文章正文（HTML 或纯文本）',
+    published_at DATETIME COMMENT '原文发布时间',
+    fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '入库时间',
+    status TINYINT DEFAULT 1 COMMENT '状态 1-正常 0-隐藏',
+    UNIQUE KEY uk_url (source_url(255)),
+    INDEX idx_published (published_at DESC),
+    INDEX idx_source (source_name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='评测知识文章';
+
+-- ============================================================
+-- RSS 订阅源
+-- ============================================================
+CREATE TABLE IF NOT EXISTS eval_rss_source (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    source_name VARCHAR(200) NOT NULL COMMENT '来源名称',
+    feed_url VARCHAR(1000) NOT NULL COMMENT 'RSS/Atom 地址（tencent 类型时为腾讯云 JSON 接口地址）',
+    source_type VARCHAR(20) NOT NULL DEFAULT 'rss' COMMENT '源类型：rss-标准feed，tencent-腾讯云JSON接口',
+    description VARCHAR(500) COMMENT '描述',
+    status TINYINT DEFAULT 1 COMMENT '1-启用 0-停用',
+    last_fetched_at DATETIME COMMENT '上次拉取时间',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    UNIQUE KEY uk_feed_url (feed_url(255))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='RSS 订阅源';

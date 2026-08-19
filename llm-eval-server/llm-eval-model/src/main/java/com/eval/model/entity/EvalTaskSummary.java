@@ -30,13 +30,19 @@ public class EvalTaskSummary implements Serializable {
     /** 维度名称(NULL=整体) */
     private String dimension;
 
-    /** 总条目数 */
+    /** 总条目数（判定成功 = good + badcase + unknown） */
     private Integer totalCount;
 
-    /** badcase数量 */
+    /** goodcase数量（JUDGED 且 is_badcase=0） */
+    private Integer goodCount;
+
+    /** badcase数量（JUDGED 且 is_badcase=1） */
     private Integer badcaseCount;
 
-    /** 无法判定数(AI输出无法解析) */
+    /** unknown数量（JUDGED 且 is_badcase=null，AI 无法判定结论） */
+    private Integer unknownCount;
+
+    /** 无法判定数(AI输出无法解析，judge_status=SKIP) */
     private Integer skipCount;
 
     /** badcase率(%) */

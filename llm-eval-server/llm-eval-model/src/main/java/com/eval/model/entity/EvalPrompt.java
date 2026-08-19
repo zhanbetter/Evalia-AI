@@ -18,6 +18,9 @@ public class EvalPrompt implements Serializable {
     @TableId(type = IdType.AUTO)
     private Long id;
 
+    /** 版本号（更新时自动+1） */
+    private Integer version;
+
     /** Prompt名称 */
     private String name;
 

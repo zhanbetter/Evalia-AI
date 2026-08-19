@@ -1,0 +1,174 @@
+# ============================================================
+# Evalia-AI 生产环境编排（全量 Docker Compose）
+#
+# 用法：
+#   1. 复制 .env.prod.example 为 .env 并填写真实配置
+#   2. 服务器防火墙放行 80 / 443 / 22，域名 A 记录指向服务器 IP
+#   3. docker compose -f docker-compose.prod.yml up -d --build
+#
+# 说明：
+#   - 只有 web(Caddy) 对外暴露 80/443，自动申请 HTTPS 证书
+#   - 后端 / MySQL / Redis / MinIO / Kafka 均只在内部网络
+#   - 生产安全：请在 .env 中改掉所有默认密码并配置 EVAL_ENCRYPT_KEY
+# ============================================================
+
+name: evalias
+services:
+  mysql:
+    image: mysql:8.0
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:?未设置 DB_PASSWORD}
+      MYSQL_DATABASE: llm_eval
+    command:
+      - --default-authentication-plugin=mysql_native_password
+      - --innodb-buffer-pool-size=256M
+      - --max-connections=100
+      - --innodb-log-file-size=48M
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./llm-eval-server/sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${DB_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks: [evalnet]
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    command: redis-server --maxmemory 64mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks: [evalnet]
+
+  minio:
+    image: minio/minio:latest
+    restart: always
+    environment:
+      MINIO_ROOT_USER: ${MINIO_USER:?未设置 MINIO_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD:?未设置 MINIO_PASSWORD}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    networks: [evalnet]
+
+  # 一次性任务：等 MinIO 就绪后自动创建 bucket（幂等，可重复执行）
+  minio-init:
+    image: minio/mc
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_started
+    environment:
+      MINIO_USER: ${MINIO_USER}
+      MINIO_PASSWORD: ${MINIO_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET:-llm-eval}
+    entrypoint: >
+      /bin/sh -c '
+      until (mc alias set myminio http://minio:9000 "$${MINIO_USER}" "$${MINIO_PASSWORD}" >/dev/null 2>&1); do sleep 2; done;
+      mc mb -p "myminio/$${MINIO_BUCKET}" 2>/dev/null || true;
+      mc anonymous set none "myminio/$${MINIO_BUCKET}" >/dev/null 2>&1;
+      echo "MinIO bucket [$${MINIO_BUCKET}] ready";
+      '
+    networks: [evalnet]
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    restart: always
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      KAFKA_HEAP_OPTS: "-Xmx128m -Xms128m"
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+    networks: [evalnet]
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    restart: always
+    depends_on:
+      zookeeper:
+        condition: service_started
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_HEAP_OPTS: "-Xmx256m -Xms256m"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/usr/bin/kafka-broker-api-versions --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks: [evalnet]
+
+  backend:
+    build: ./llm-eval-server
+    restart: always
+    depends_on:
+      mysql:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      minio:
+        condition: service_started
+      redis:
+        condition: service_started
+    environment:
+      DB_HOST: mysql
+      DB_USERNAME: ${DB_USERNAME:-root}
+      DB_PASSWORD: ${DB_PASSWORD}
+      REDIS_HOST: redis
+      KAFKA_HOST: kafka
+      MINIO_HOST: minio
+      MINIO_PORT: 9000
+      MINIO_USER: ${MINIO_USER}
+      MINIO_PASSWORD: ${MINIO_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET:-llm-eval}
+      EVAL_ENCRYPT_KEY: ${EVAL_ENCRYPT_KEY}
+      JAVA_OPTS: "-Xms128m -Xmx384m"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080'"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+    networks: [evalnet]
+
+  # 对外入口：Caddy 提供静态前端 + API 反代 + 自动 HTTPS
+  web:
+    build: ./llm-eval-ui
+    restart: always
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      DOMAIN: ${DOMAIN:?未设置 DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [evalnet]
+
+networks:
+  evalnet:
+    driver: bridge
+
+volumes:
+  mysql_data:
+  redis_data:
+  minio_data:
+  zookeeper_data:
+  kafka_data:
+  caddy_data:
+  caddy_config:

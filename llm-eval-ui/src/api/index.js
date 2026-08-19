@@ -15,6 +15,8 @@ export const datasetApi = {
   addItem: (id, data) => request.post(`/datasets/${id}/items`, data),
   updateItem: (itemId, data) => request.put(`/datasets/items/${itemId}`, data),
   deleteItem: (itemId) => request.delete(`/datasets/items/${itemId}`),
+  detectDuplicates: (id, fieldName, threshold) => request.post(`/datasets/${id}/detect-duplicates`, null, { params: { fieldName, threshold } }),
+  batchDeleteItems: (id, itemIds) => request.post(`/datasets/${id}/items/batch-delete`, itemIds),
   listVersions: (name) => request.get('/datasets/versions', { params: { name } }),
   listEvalHistory: (id) => request.get(`/datasets/${id}/eval-history`)
 }
@@ -35,6 +37,7 @@ export const promptApi = {
   update: (id, data) => request.put(`/prompts/${id}`, data),
   delete: (id) => request.delete(`/prompts/${id}`),
   getById: (id) => request.get(`/prompts/${id}`),
+  listVersions: (id) => request.get(`/prompts/${id}/versions`),
   parsePlaceholders: (template) => request.get('/prompts/parse-placeholders', { params: { template } }),
   preview: (data) => request.post('/prompts/preview', data),
   polish: (modelId, dimensionsConfig) => request.post('/prompts/polish', { modelId, dimensionsConfig }),
@@ -75,4 +78,9 @@ export const resultApi = {
 export const reportApi = {
   preview: (taskId) => request.get(`/reports/${taskId}/preview`),
   downloadUrl: (taskId) => `/api/reports/${taskId}/download`
+}
+
+// Playground API
+export const playgroundApi = {
+  run: (data) => request.post('/playground/run', data)
 }

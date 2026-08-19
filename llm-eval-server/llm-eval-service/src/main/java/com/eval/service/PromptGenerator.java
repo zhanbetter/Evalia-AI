@@ -9,6 +9,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,6 +32,12 @@ public class PromptGenerator {
         private List<DimensionDef> dimensions;
         private String badcaseRule; // any / all / majority
         private String extraInstructions;
+        /** 严格输出开关：开启时在 Prompt 末尾注入输出格式规范(JSON Schema)，并要求模型严格遵循 */
+        private Boolean strictOutput;
+        /** 思维链引导：开启时要求模型逐步分析后再输出评分 */
+        private Boolean enableCot;
+        /** Few-shot 评测示例 */
+        private List<FewShotExample> fewShots;
 
         public static DimensionsConfig fromJson(String json) {
             if (StrUtil.isBlank(json)) return null;
@@ -43,6 +50,25 @@ public class PromptGenerator {
                 config.setContextTemplate(obj.getStr("context_template", ""));
                 config.setBadcaseRule(obj.getStr("badcase_rule", "any"));
                 config.setExtraInstructions(obj.getStr("extra_instructions", ""));
+                // strict_output：兼容旧数据（缺失默认 false）
+                config.setStrictOutput(obj.getBool("strict_output", false));
+                config.setEnableCot(obj.getBool("enable_cot", false));
+
+                // few_shots
+                JSONArray fsArr = obj.getJSONArray("few_shots");
+                if (fsArr != null) {
+                    List<FewShotExample> fsList = new ArrayList<>();
+                    for (int i = 0; i < fsArr.size(); i++) {
+                        JSONObject fs = fsArr.getJSONObject(i);
+                        FewShotExample ex = new FewShotExample();
+                        ex.setQuestion(fs.getStr("question", ""));
+                        ex.setResponse(fs.getStr("response", ""));
+                        ex.setReference(fs.getStr("reference", ""));
+                        ex.setExpectedOutput(fs.getStr("expected_output", ""));
+                        fsList.add(ex);
+                    }
+                    config.setFewShots(fsList);
+                }
 
                 JSONArray dims = obj.getJSONArray("dimensions");
                 if (dims != null) {
@@ -107,11 +133,20 @@ public class PromptGenerator {
     }
 
     @Data
+    public static class FewShotExample {
+        private String question;
+        private String response;
+        private String reference;
+        private String expectedOutput;
+    }
+
+    @Data
     public static class DimensionResult {
         private String name;
-        private Object score; // Integer / String / Boolean
+        private Object score; // Integer / String / Boolean / null(unknown)
         private String reason;
-        private boolean isBadcase;
+        /** 是否判定为 badcase；null=unknown（AI 无法判断该维度） */
+        private Boolean isBadcase;
     }
 
     // ========== Prompt 生成 ==========
@@ -194,37 +229,68 @@ public class PromptGenerator {
         }
         sb.append("\n");
 
-        // 6. 输出格式（根据维度定义自动生成）
-        sb.append("【输出格式】\n严格按照以下JSON格式输出，不得输出多余内容：\n\n```json\n{\n");
-        sb.append("  \"dimensions\": {\n");
-        for (int i = 0; i < config.getDimensions().size(); i++) {
-            DimensionDef dim = config.getDimensions().get(i);
-            sb.append("    \"").append(dim.getName()).append("\": { ");
-            if ("score".equals(dim.getScoringType())) {
-                sb.append("\"score\": 1-5, \"reason\": \"简要说明\"");
-            } else if ("enum".equals(dim.getScoringType())) {
-                sb.append("\"result\": \"").append(String.join("/", dim.getEnumValues())).append("\", \"reason\": \"简要说明\"");
-            } else if ("boolean".equals(dim.getScoringType())) {
-                sb.append("\"result\": true/false, \"reason\": \"简要说明\"");
-            } else {
-                // custom：用 rubric 的 level 作为可选等级
-                String levels = "";
-                if (dim.getRubric() != null && !dim.getRubric().isEmpty()) {
-                    levels = dim.getRubric().stream()
-                            .map(RubricItem::getLevel)
-                            .filter(l -> l != null && !l.isEmpty())
-                            .collect(Collectors.joining("/"));
-                }
-                if (levels.isEmpty()) levels = "自定义等级";
-                sb.append("\"result\": \"").append(levels).append("\", \"reason\": \"简要说明\"");
+        // 5.5 评测示例（few-shot）
+        if (config.getFewShots() != null && !config.getFewShots().isEmpty()) {
+            sb.append("【评测示例】\n");
+            for (int i = 0; i < config.getFewShots().size(); i++) {
+                FewShotExample ex = config.getFewShots().get(i);
+                sb.append("示例").append(i + 1).append("：\n");
+                if (StrUtil.isNotBlank(ex.getQuestion())) sb.append("问题：").append(ex.getQuestion()).append("\n");
+                if (StrUtil.isNotBlank(ex.getReference())) sb.append("参考答案：").append(ex.getReference()).append("\n");
+                if (StrUtil.isNotBlank(ex.getResponse())) sb.append("模型回答：").append(ex.getResponse()).append("\n");
+                if (StrUtil.isNotBlank(ex.getExpectedOutput())) sb.append("期望输出：\n").append(ex.getExpectedOutput()).append("\n");
+                sb.append("\n");
             }
-            sb.append(" }");
-            if (i < config.getDimensions().size() - 1) sb.append(",");
-            sb.append("\n");
         }
-        sb.append("  },\n");
-        sb.append("  \"is_badcase\": true/false,\n");
-        sb.append("  \"reason\": \"整体判定理由\"\n}\n```\n");
+
+        // 6. 输出格式（根据维度定义自动生成）
+        // 开启 strict_output 时只输出严格 schema（见下方 buildOutputSchemaBlock），避免与示例重复
+        if (!Boolean.TRUE.equals(config.getStrictOutput())) {
+            sb.append("【输出格式】\n严格按照以下JSON格式输出，不得输出多余内容：\n\n```json\n{\n");
+            sb.append("  \"dimensions\": {\n");
+            for (int i = 0; i < config.getDimensions().size(); i++) {
+                DimensionDef dim = config.getDimensions().get(i);
+                sb.append("    \"").append(dim.getName()).append("\": { ");
+                if ("score".equals(dim.getScoringType())) {
+                    sb.append("\"score\": 1-5, \"reason\": \"简要说明\"");
+                } else if ("enum".equals(dim.getScoringType())) {
+                    sb.append("\"result\": \"").append(String.join("/", dim.getEnumValues())).append("\", \"reason\": \"简要说明\"");
+                } else if ("boolean".equals(dim.getScoringType())) {
+                    sb.append("\"result\": true/false（无法判断时填 null）, \"reason\": \"简要说明\"");
+                } else {
+                    // custom：用 rubric 的 level 作为可选等级
+                    String levels = "";
+                    if (dim.getRubric() != null && !dim.getRubric().isEmpty()) {
+                        levels = dim.getRubric().stream()
+                                .map(RubricItem::getLevel)
+                                .filter(l -> l != null && !l.isEmpty())
+                                .collect(Collectors.joining("/"));
+                    }
+                    if (levels.isEmpty()) levels = "自定义等级";
+                    sb.append("\"result\": \"").append(levels).append("\", \"reason\": \"简要说明\"");
+                }
+                sb.append(" }");
+                if (i < config.getDimensions().size() - 1) sb.append(",");
+                sb.append("\n");
+            }
+            sb.append("  },\n");
+            sb.append("  \"is_badcase\": true/false（无法判断时填 null）,\n");
+            sb.append("  \"reason\": \"整体判定理由\"\n}\n```\n");
+        }
+
+        // enable_cot：注入思维链引导指令
+        if (Boolean.TRUE.equals(config.getEnableCot())) {
+            sb.append("\n【思维链引导】\n");
+            sb.append("在输出最终JSON之前，请先逐步分析：\n");
+            sb.append("1. 逐个分析各评分维度，给出每个维度的判断依据\n");
+            sb.append("2. 综合各维度分析，给出整体判定理由\n");
+            sb.append("3. 最后输出符合格式要求的JSON\n\n");
+        }
+
+        // strict_output：注入输出格式规范，要求模型严格遵循
+        if (Boolean.TRUE.equals(config.getStrictOutput())) {
+            sb.append("\n").append(buildOutputSchemaBlock(config, null));
+        }
 
         return sb.toString();
     }
@@ -256,7 +322,7 @@ public class PromptGenerator {
         } else if ("enum".equals(dim.getScoringType()) && dim.getEnumValues() != null) {
             sb.append("（可选值：").append(String.join("/", dim.getEnumValues())).append("）");
         } else if ("boolean".equals(dim.getScoringType())) {
-            sb.append("（是/否）");
+            sb.append("（是/否，若资料不足无法判断请输出 null）");
         } else {
             // custom：用 rubric 的 level 作为可选等级
             String levels = "";
@@ -286,11 +352,13 @@ public class PromptGenerator {
         }
 
         // 5. 输出格式（单维度）
-        sb.append("【输出格式】\n严格按照以下JSON格式输出，不得输出多余内容：\n\n```json\n{\n");
-        sb.append("  \"score\": ");
-        if ("score".equals(dim.getScoringType())) {
-            sb.append("1-5");
-        } else if ("enum".equals(dim.getScoringType()) || "custom".equals(dim.getScoringType())) {
+        // 开启 strict_output 时只输出严格 schema，避免与示例重复
+        if (!Boolean.TRUE.equals(config.getStrictOutput())) {
+            sb.append("【输出格式】\n严格按照以下JSON格式输出，不得输出多余内容：\n\n```json\n{\n");
+            sb.append("  \"score\": ");
+            if ("score".equals(dim.getScoringType())) {
+                sb.append("1-5");
+            } else if ("enum".equals(dim.getScoringType()) || "custom".equals(dim.getScoringType())) {
             String levels = "";
             if (dim.getEnumValues() != null && dim.getEnumValues().length > 0) {
                 levels = String.join("/", dim.getEnumValues());
@@ -303,12 +371,103 @@ public class PromptGenerator {
             if (levels.isEmpty()) levels = "等级";
             sb.append("\"").append(levels).append("\"");
         } else if ("boolean".equals(dim.getScoringType())) {
-            sb.append("true/false");
+            sb.append("true/false（无法判断时填 null）");
         }
         sb.append(",\n");
         sb.append("  \"reason\": \"简要说明\"\n}\n```\n");
+        }
+
+        // enable_cot：注入思维链引导指令
+        if (Boolean.TRUE.equals(config.getEnableCot())) {
+            sb.append("\n【思维链引导】\n");
+            sb.append("在输出最终JSON之前，请先分析：\n");
+            sb.append("1. 根据评分标准，分析模型回答在该维度的表现\n");
+            sb.append("2. 给出判断依据\n");
+            sb.append("3. 最后输出符合格式要求的JSON\n\n");
+        }
+
+        // strict_output：注入单维度输出格式规范
+        if (Boolean.TRUE.equals(config.getStrictOutput())) {
+            sb.append("\n").append(buildOutputSchemaBlock(config, dim));
+        }
 
         return sb.toString();
+    }
+
+    // ========== 输出格式规范（strict_output） ==========
+
+    /**
+     * 生成输出格式规范（JSON Schema 风格），strict_output 开启时注入 Prompt
+     * @param config 完整维度配置
+     * @param dimension null=生成整体规范（is_badcase + dimensions）；非null=仅生成单维度规范
+     */
+    private String buildOutputSchemaBlock(DimensionsConfig config, DimensionDef dimension) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("【输出格式规范】\n必须严格按照以下 schema 输出 JSON 对象，key 完全一致，值必须为合法类型，不得输出 schema 之外的任何 key：\n\n");
+        if (dimension != null) {
+            sb.append("{\n");
+            appendDimFieldSchema(sb, dimension, 1);
+            sb.append("  \"reason\": \"字符串，判定理由\"\n");
+            sb.append("}\n");
+        } else {
+            sb.append("{\n");
+            sb.append("  \"is_badcase\": 布尔值 true/false 或 null（是否整体判定为 badcase；资料不足无法判断时填 null）,\n");
+            sb.append("  \"dimensions\": {\n");
+            if (config.getDimensions() != null) {
+                for (int i = 0; i < config.getDimensions().size(); i++) {
+                    DimensionDef dim = config.getDimensions().get(i);
+                    sb.append("    \"").append(dim.getName()).append("\": {\n");
+                    appendDimFieldSchema(sb, dim, 3);
+                    sb.append("      \"reason\": \"字符串\"\n");
+                    sb.append("    }");
+                    if (i < config.getDimensions().size() - 1) sb.append(",");
+                    sb.append("\n");
+                }
+            }
+            sb.append("  },\n");
+            sb.append("  \"reason\": \"字符串，整体判定理由\"\n");
+            sb.append("}\n");
+        }
+        sb.append("请直接输出 JSON（不要用 markdown 代码块包裹，不要输出任何多余文字）。");
+        return sb.toString();
+    }
+
+    /**
+     * 追加单个维度结果字段的 schema 描述
+     */
+    private void appendDimFieldSchema(StringBuilder sb, DimensionDef dim, int indent) {
+        String pad = "";
+        for (int i = 0; i < indent; i++) pad += "  ";
+        if ("score".equals(dim.getScoringType())) {
+            String range = "1-5 的整数";
+            if (dim.getRubric() != null && !dim.getRubric().isEmpty()) {
+                List<String> levels = dim.getRubric().stream()
+                        .map(RubricItem::getLevel)
+                        .filter(l -> l != null && !l.isEmpty())
+                        .collect(Collectors.toList());
+                if (!levels.isEmpty()) range = "整数，只能取值为 " + String.join("、", levels);
+            }
+            sb.append(pad).append("\"score\": ").append(range).append(",\n");
+        } else if ("enum".equals(dim.getScoringType())) {
+            String allowed = dim.getEnumValues() != null && dim.getEnumValues().length > 0
+                    ? String.join("/", dim.getEnumValues()) : "枚举值";
+            sb.append(pad).append("\"result\": 字符串，只能是以下值之一: ").append(allowed).append(",\n");
+        } else if ("boolean".equals(dim.getScoringType())) {
+            sb.append(pad).append("\"result\": 布尔值 true/false 或 null（无法判断时填 null）,\n");
+        } else {
+            // custom：优先 enum_values，其次 rubric level
+            String allowed = "";
+            if (dim.getEnumValues() != null && dim.getEnumValues().length > 0) {
+                allowed = String.join("/", dim.getEnumValues());
+            } else if (dim.getRubric() != null && !dim.getRubric().isEmpty()) {
+                allowed = dim.getRubric().stream()
+                        .map(RubricItem::getLevel)
+                        .filter(l -> l != null && !l.isEmpty())
+                        .collect(Collectors.joining("/"));
+            }
+            if (allowed.isEmpty()) allowed = "枚举值";
+            sb.append(pad).append("\"result\": 字符串，只能是以下值之一: ").append(allowed).append(",\n");
+        }
     }
 
     /**
@@ -330,23 +489,38 @@ public class PromptGenerator {
                 int score = jsonObj.getInt("score", 0);
                 dr.setScore(score);
                 dr.setReason(jsonObj.getStr("reason", ""));
-                dr.setBadcase(evaluateThreshold(score, dim.getBadcaseThreshold()));
+                dr.setIsBadcase(evaluateThreshold(score, dim.getBadcaseThreshold()));
             } else if ("enum".equals(dim.getScoringType()) || "custom".equals(dim.getScoringType())) {
-                String result = jsonObj.getStr("result", jsonObj.getStr("score", ""));
-                dr.setScore(result);
+                Object rawResult = jsonObj.containsKey("result") ? jsonObj.get("result") : jsonObj.get("score");
+                String enumVal = rawResult != null ? rawResult.toString() : "";
+                dr.setScore(enumVal);
                 dr.setReason(jsonObj.getStr("reason", ""));
-                dr.setBadcase(evaluateEnumThreshold(result, dim.getBadcaseThreshold()));
+                // 校验枚举值是否在 schema 允许范围内（strict_output 模式更易触发）；unknown 值豁免
+                if (dim.getEnumValues() != null && dim.getEnumValues().length > 0 && !isUnknownValue(rawResult)) {
+                    boolean allowed = Arrays.asList(dim.getEnumValues()).contains(enumVal);
+                    if (!allowed) {
+                        log.warn("维度[{}]枚举值不在schema允许范围内: value={}, allowed={}",
+                                dim.getName(), enumVal, String.join("/", dim.getEnumValues()));
+                    }
+                }
+                // AI 表明无法判断 → unknown；否则按阈值判断
+                if (isUnknownValue(rawResult)) {
+                    dr.setIsBadcase(null);
+                } else {
+                    dr.setIsBadcase(evaluateEnumThreshold(enumVal, dim.getBadcaseThreshold()));
+                }
             } else if ("boolean".equals(dim.getScoringType())) {
-                Boolean val = jsonObj.containsKey("result") ? jsonObj.getBool("result", false) : jsonObj.getBool("score", false);
+                Object rawVal = jsonObj.containsKey("result") ? jsonObj.get("result") : jsonObj.get("score");
+                Boolean val = isUnknownValue(rawVal) ? null : parseBooleanValue(rawVal);
                 dr.setScore(val);
                 dr.setReason(jsonObj.getStr("reason", ""));
-                dr.setBadcase(evaluateBooleanThreshold(val, dim.getBadcaseThreshold()));
+                dr.setIsBadcase(val == null ? null : evaluateBooleanThreshold(val, dim.getBadcaseThreshold()));
             }
 
             dr.setReason(jsonObj.getStr("reason", dr.getReason() != null ? dr.getReason().toString() : ""));
         } catch (Exception e) {
             log.warn("解析单维度评测结果失败: {}", aiResponse, e);
-            dr.setBadcase(false);
+            dr.setIsBadcase(false);
             dr.setReason("解析AI结果失败: " + aiResponse);
         }
 
@@ -384,33 +558,44 @@ public class PromptGenerator {
                         if ("score".equals(dimDef.getScoringType())) {
                             dr.setScore(dimResult.getInt("score", 0));
                             dr.setReason(dimResult.getStr("reason", ""));
-                            dr.setBadcase(evaluateThreshold(dimResult.getInt("score", 0), dimDef.getBadcaseThreshold()));
+                            dr.setIsBadcase(evaluateThreshold(dimResult.getInt("score", 0), dimDef.getBadcaseThreshold()));
                         } else if ("enum".equals(dimDef.getScoringType()) || "custom".equals(dimDef.getScoringType())) {
-                            dr.setScore(dimResult.getStr("result", ""));
+                            Object rawResult = dimResult.containsKey("result") ? dimResult.get("result") : dimResult.get("score");
+                            String enumVal = rawResult != null ? rawResult.toString() : "";
+                            dr.setScore(enumVal);
                             dr.setReason(dimResult.getStr("reason", ""));
-                            dr.setBadcase(evaluateEnumThreshold(dimResult.getStr("result", ""), dimDef.getBadcaseThreshold()));
+                            if (isUnknownValue(rawResult)) {
+                                dr.setIsBadcase(null);
+                            } else {
+                                dr.setIsBadcase(evaluateEnumThreshold(enumVal, dimDef.getBadcaseThreshold()));
+                            }
                         } else if ("boolean".equals(dimDef.getScoringType())) {
-                            Boolean val = dimResult.getBool("result", false);
+                            Object rawVal = dimResult.containsKey("result") ? dimResult.get("result") : dimResult.get("score");
+                            Boolean val = isUnknownValue(rawVal) ? null : parseBooleanValue(rawVal);
                             dr.setScore(val);
                             dr.setReason(dimResult.getStr("reason", ""));
-                            dr.setBadcase(evaluateBooleanThreshold(val, dimDef.getBadcaseThreshold()));
+                            dr.setIsBadcase(val == null ? null : evaluateBooleanThreshold(val, dimDef.getBadcaseThreshold()));
                         }
                     }
 
                     result.getDimensionResults().add(dr);
-                    if (dr.isBadcase()) {
+                    if (Boolean.TRUE.equals(dr.getIsBadcase())) {
                         result.getBadDimensions().add(dimDef.getName());
                     }
                 }
             }
 
-            // 整体 is_badcase：优先取 AI 返回的值，没有则根据规则计算
+            // 整体 is_badcase：优先取 AI 返回的值（支持 null=unknown），没有则根据规则计算
             if (jsonObj.containsKey("is_badcase")) {
-                result.setBadcase(jsonObj.getBool("is_badcase", false));
+                Object raw = jsonObj.get("is_badcase");
+                result.setBadcase(isUnknownValue(raw) ? null : parseBooleanValue(raw));
             } else if (jsonObj.containsKey("badcase")) {
                 Object val = jsonObj.get("badcase");
-                if (val instanceof Boolean) result.setBadcase((Boolean) val);
-                else if (val != null) {
+                if (isUnknownValue(val)) {
+                    result.setBadcase(null);
+                } else if (val instanceof Boolean) {
+                    result.setBadcase((Boolean) val);
+                } else {
                     String s = val.toString().trim();
                     result.setBadcase("是".equals(s) || "true".equalsIgnoreCase(s) || "1".equals(s));
                 }
@@ -438,7 +623,8 @@ public class PromptGenerator {
 
     @Data
     public static class ParseResult {
-        private boolean badcase;
+        /** 整体是否 badcase；null=unknown */
+        private Boolean badcase;
         private List<String> badDimensions;
         private List<DimensionResult> dimensionResults;
         private String reason;
@@ -476,6 +662,39 @@ public class PromptGenerator {
     private boolean evaluateBooleanThreshold(Boolean value, String threshold) {
         if (StrUtil.isBlank(threshold)) return false;
         return "true".equalsIgnoreCase(threshold.trim()) == value;
+    }
+
+    /**
+     * 判断 AI 输出是否为"unknown"表达（无法判断该维度/整体）
+     * null、空串、unknown/unable/unclear、无法判断/不确定/未知 等 → true
+     */
+    private static boolean isUnknownValue(Object raw) {
+        if (raw == null) return true;
+        String s = raw.toString().trim();
+        if (s.isEmpty()) return true;
+        return "unknown".equalsIgnoreCase(s)
+                || "unable".equalsIgnoreCase(s)
+                || "unclear".equalsIgnoreCase(s)
+                || "cannot".equalsIgnoreCase(s.replace(" ", ""))
+                || "不确定".equals(s)
+                || "无法判断".equals(s)
+                || "无法确定".equals(s)
+                || "无法判定".equals(s)
+                || "无法评估".equals(s)
+                || "资料不足".equals(s)
+                || "信息不足".equals(s)
+                || "未知".equals(s);
+    }
+
+    /**
+     * 解析布尔值：Boolean 原样返回；数字 0/非0；字符串 true/是/1 → true，其余 → false
+     * （调用方应先 isUnknownValue 判断，此处不再处理 unknown）
+     */
+    private static Boolean parseBooleanValue(Object raw) {
+        if (raw instanceof Boolean) return (Boolean) raw;
+        if (raw instanceof Number) return ((Number) raw).intValue() != 0;
+        String s = raw.toString().trim();
+        return "true".equalsIgnoreCase(s) || "是".equals(s) || "1".equals(s);
     }
 
     public boolean applyBadcaseRule(int badDimCount, int totalDimCount, String rule) {

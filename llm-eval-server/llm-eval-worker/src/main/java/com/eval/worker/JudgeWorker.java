@@ -18,6 +18,7 @@ import com.eval.service.harness.LlmJudgeMetric;
 import com.eval.service.harness.MetricResult;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
@@ -46,6 +47,7 @@ public class JudgeWorker {
     private final EvalTaskPromptMapper taskPromptMapper;
     private final EvalTaskModelMapper taskModelMapper;
     private final LlmApiClient llmApiClient;
+    private final StringRedisTemplate redisTemplate;
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final PromptGenerator promptGenerator;
     private final DatasetAdapter datasetAdapter;
@@ -68,8 +70,19 @@ public class JudgeWorker {
                 new LambdaQueryWrapper<EvalTaskPrompt>().eq(EvalTaskPrompt::getTaskId, taskId));
         List<EvalPrompt> prompts = new ArrayList<>();
         for (EvalTaskPrompt tp : taskPrompts) {
-            EvalPrompt p = promptMapper.selectById(tp.getPromptId());
-            if (p != null) prompts.add(p);
+            // 优先使用任务创建时冻结的快照（评估器后续编辑不影响本任务）；旧任务无快照时回退当前表
+            if (StrUtil.isNotBlank(tp.getPromptTemplate()) || StrUtil.isNotBlank(tp.getDimensionsConfig())) {
+                EvalPrompt p = new EvalPrompt();
+                p.setId(tp.getPromptId());
+                p.setName(StrUtil.blankToDefault(tp.getPromptName(), ""));
+                p.setPromptTemplate(tp.getPromptTemplate());
+                p.setDimensionsConfig(tp.getDimensionsConfig());
+                p.setStatus(1);
+                prompts.add(p);
+            } else {
+                EvalPrompt p = promptMapper.selectById(tp.getPromptId());
+                if (p != null) prompts.add(p);
+            }
         }
         if (prompts.isEmpty()) {
             log.warn("无评测Prompt: taskId={}", taskId);
@@ -102,6 +115,15 @@ public class JudgeWorker {
         // 4. 为每条结果 × 每个评测Prompt 创建判定记录并执行
         int judgedCount = 0;
         int totalCount = results.size() * prompts.size();
+        String progressKey = "eval:task:" + taskId + ":judge-progress";
+
+        // 初始化 Judge 进度
+        redisTemplate.opsForHash().putAll(progressKey, Map.of(
+                "TOTAL", String.valueOf(totalCount),
+                "COMPLETED", "0"
+        ));
+        redisTemplate.expire(progressKey, 7, java.util.concurrent.TimeUnit.DAYS);
+
         for (EvalResult result : results) {
             EvalDatasetItem item = datasetItemMapper.selectById(result.getDatasetItemId());
 
@@ -141,6 +163,7 @@ public class JudgeWorker {
                     }
 
                     int dimBadcaseCount = 0;
+                    int dimUnknownCount = 0;
                     int dimJudged = 0;
                     // 归一化为统一样本（被测模型回答从 result.response 读取）
                     EvalSample sample = datasetAdapter.toSample(item, result.getResponse());
@@ -157,12 +180,18 @@ public class JudgeWorker {
                             metricConfig.put("fieldMapping", mapping);
                             MetricResult mr = llmJudgeMetric.evaluate(sample, metricConfig);
 
-                            jr.setIsBadcase(mr.isBadcase() ? 1 : 0);
+                            // 三态：true=badcase / false=goodcase / null=unknown（AI无法判断）
+                            Boolean bad = mr.getBadcase();
+                            jr.setIsBadcase(bad == null ? null : (bad ? 1 : 0));
                             jr.setReason(mr.getReason());
                             jr.setJudgeStatus(JudgeStatus.JUDGED);
                             judgeResultMapper.updateById(jr);
                             dimJudged++;
-                            if (mr.isBadcase()) dimBadcaseCount++;
+                            if (bad == null) {
+                                dimUnknownCount++;
+                            } else if (bad) {
+                                dimBadcaseCount++;
+                            }
                         } catch (Exception e) {
                             log.error("单维度评测失败: jrId={}, dim={}, itemId={}", jr.getId(), dim.getName(), result.getDatasetItemId(), e);
                             jr.setJudgeStatus(JudgeStatus.SKIP);
@@ -172,7 +201,7 @@ public class JudgeWorker {
                         }
                     }
 
-                    // 聚合生成整体判定记录（dimension=NULL），按 badcase_rule 计算
+                    // 聚合生成整体判定记录（dimension=NULL），按 badcase_rule 计算，支持三态
                     EvalJudgeResult overallJr = new EvalJudgeResult();
                     overallJr.setTaskId(taskId);
                     overallJr.setModelConfigId(result.getModelConfigId());
@@ -181,7 +210,23 @@ public class JudgeWorker {
                     overallJr.setDimension(null);
                     if (dimJudged > 0) {
                         boolean overallBad = promptGenerator.applyBadcaseRule(dimBadcaseCount, dimJudged, dimConfig.getBadcaseRule());
-                        overallJr.setIsBadcase(overallBad ? 1 : 0);
+                        if (overallBad) {
+                            overallJr.setIsBadcase(1);
+                            overallJr.setJudgeStatus(JudgeStatus.JUDGED);
+                            overallJr.setReason(String.format("共%d个维度，%d个判定为badcase，%d个无法判断（规则:%s）",
+                                    dimJudged, dimBadcaseCount, dimUnknownCount, dimConfig.getBadcaseRule()));
+                        } else if (dimUnknownCount > 0) {
+                            // 未触发 badcase 规则，但存在 unknown 维度 → 整体 unknown
+                            overallJr.setIsBadcase(null);
+                            overallJr.setJudgeStatus(JudgeStatus.JUDGED);
+                            overallJr.setReason(String.format("未触发badcase规则，但%d个维度无法判断，整体结论为unknown（规则:%s）",
+                                    dimUnknownCount, dimConfig.getBadcaseRule()));
+                        } else {
+                            overallJr.setIsBadcase(0);
+                            overallJr.setJudgeStatus(JudgeStatus.JUDGED);
+                            overallJr.setReason(String.format("共%d个维度，%d个判定为badcase，%d个无法判断（规则:%s）",
+                                    dimJudged, dimBadcaseCount, dimUnknownCount, dimConfig.getBadcaseRule()));
+                        }
                         // 记录触发 badcase 的维度列表
                         List<String> badDims = new ArrayList<>();
                         for (int i = 0; i < dims.size(); i++) {
@@ -191,9 +236,6 @@ public class JudgeWorker {
                             }
                         }
                         overallJr.setDimensions(JSONUtil.toJsonStr(badDims));
-                        overallJr.setJudgeStatus(JudgeStatus.JUDGED);
-                        overallJr.setReason(String.format("共%d个维度，%d个维度判定为badcase（规则:%s）",
-                                dimJudged, dimBadcaseCount, dimConfig.getBadcaseRule()));
                     } else {
                         overallJr.setJudgeStatus(JudgeStatus.SKIP);
                         overallJr.setIsBadcase(null);
@@ -201,6 +243,7 @@ public class JudgeWorker {
                     }
                     judgeResultMapper.insert(overallJr);
                     judgedCount++;
+                    redisTemplate.opsForHash().increment(progressKey, "COMPLETED", 1);
 
                 } else {
                     // ===== 旧模式（自由文本 prompt）：一次调用，整体判定 =====
@@ -250,6 +293,7 @@ public class JudgeWorker {
                         jr.setJudgeStatus(JudgeStatus.JUDGED);
                         judgeResultMapper.updateById(jr);
                         judgedCount++;
+                        redisTemplate.opsForHash().increment(progressKey, "COMPLETED", 1);
 
                     } catch (Exception e) {
                         log.error("Judge评测失败: jrId={}, itemId={}", jr.getId(), result.getDatasetItemId(), e);
@@ -323,19 +367,17 @@ public class JudgeWorker {
 
         JSONObject jsonObj = JSONUtil.parseObj(jsonStr); // 抛异常由调用方处理
 
-        // 解析 is_badcase：兼容多种写法
-        boolean isBadcase = false;
+        // 解析 is_badcase：兼容多种写法；null/unknown → 整体 unknown（judge_status 仍 JUDGED）
+        Integer verdict = null;
         if (jsonObj.containsKey("is_badcase")) {
-            isBadcase = jsonObj.getBool("is_badcase", false);
+            verdict = parseLegacyVerdict(jsonObj.get("is_badcase"));
         } else if (jsonObj.containsKey("badcase")) {
-            Object val = jsonObj.get("badcase");
-            if (val instanceof Boolean) isBadcase = (Boolean) val;
-            else if (val != null) {
-                String s = val.toString().trim();
-                isBadcase = "是".equals(s) || "true".equalsIgnoreCase(s) || "1".equals(s);
-            }
+            verdict = parseLegacyVerdict(jsonObj.get("badcase"));
+        } else {
+            // 旧行为：未显式输出 is_badcase 默认 goodcase
+            verdict = 0;
         }
-        jr.setIsBadcase(isBadcase ? 1 : 0);
+        jr.setIsBadcase(verdict);
 
         // 解析 dimensions：兼容数组 ["准确性","完整性"] 或对象 {"准确性":{...},"完整性":{...}} 两种格式
         String dimsJson = "[]";
@@ -388,6 +430,25 @@ public class JudgeWorker {
 
         // 存原始结果
         jr.setParsedResult(jsonStr);
+    }
+
+    /**
+     * 解析旧模式整体判定为三态：
+     * 1=badcase / 0=goodcase / null=unknown（AI 明示无法判断时）
+     */
+    private Integer parseLegacyVerdict(Object raw) {
+        if (raw == null) return null;
+        if (raw instanceof Boolean) return ((Boolean) raw) ? 1 : 0;
+        if (raw instanceof Number) return ((Number) raw).intValue() == 0 ? 0 : 1;
+        String s = raw.toString().trim();
+        if (s.isEmpty()) return null;
+        if ("unknown".equalsIgnoreCase(s) || "unable".equalsIgnoreCase(s) || "unclear".equalsIgnoreCase(s)
+                || "不确定".equals(s) || "无法判断".equals(s) || "无法确定".equals(s) || "无法判定".equals(s)
+                || "资料不足".equals(s) || "信息不足".equals(s) || "未知".equals(s)) {
+            return null;
+        }
+        if ("是".equals(s) || "true".equalsIgnoreCase(s) || "1".equals(s)) return 1;
+        return 0;
     }
 
     /**
@@ -444,8 +505,11 @@ public class JudgeWorker {
                 if (overallResults.isEmpty() && dimResults.isEmpty() && skipCount == 0) continue;
 
                 // ===== 整体汇总（用整体判定记录）=====
+                // JUDGED 记录三态：isBadcase 1/0/null(unknown)
                 int judgedTotal = overallResults.size();
                 int totalBadcase = (int) overallResults.stream().filter(j -> j.getIsBadcase() != null && j.getIsBadcase() == 1).count();
+                int totalGood = (int) overallResults.stream().filter(j -> j.getIsBadcase() != null && j.getIsBadcase() == 0).count();
+                int totalUnknown = judgedTotal - totalBadcase - totalGood;
 
                 EvalTaskSummary overall = new EvalTaskSummary();
                 overall.setTaskId(taskId);
@@ -453,7 +517,9 @@ public class JudgeWorker {
                 overall.setPromptId(promptId);
                 overall.setDimension(null);
                 overall.setTotalCount(judgedTotal);
+                overall.setGoodCount(totalGood);
                 overall.setBadcaseCount(totalBadcase);
+                overall.setUnknownCount(totalUnknown);
                 overall.setSkipCount((int) skipCount);
                 overall.setBadcaseRate(judgedTotal > 0
                         ? BigDecimal.valueOf(totalBadcase * 100.0 / judgedTotal).setScale(2, RoundingMode.HALF_UP)
@@ -472,8 +538,12 @@ public class JudgeWorker {
                 // 则从整体记录的 dimensions 字段（badcase 维度名列表）解析维度统计
                 if (dimGroup.isEmpty() && !overallResults.isEmpty()) {
                     // 先判断本 prompt 是否结构化（有 dimensions_config 则单维度模式，此时不该走到这里）
-                    EvalPrompt prompt = promptMapper.selectById(promptId);
-                    boolean structured = prompt != null && StrUtil.isNotBlank(prompt.getDimensionsConfig());
+                    // 优先用任务快照判断，旧任务回退当前表
+                    boolean structured = StrUtil.isNotBlank(tp.getDimensionsConfig());
+                    if (!structured) {
+                        EvalPrompt prompt = promptMapper.selectById(promptId);
+                        structured = prompt != null && StrUtil.isNotBlank(prompt.getDimensionsConfig());
+                    }
                     if (!structured) {
                         Map<String, int[]> legacyStats = new LinkedHashMap<>();
                         for (EvalJudgeResult jr : overallResults) {
@@ -489,7 +559,9 @@ public class JudgeWorker {
                             dimSummary.setPromptId(promptId);
                             dimSummary.setDimension(dim);
                             dimSummary.setTotalCount(dimTotal);
+                            dimSummary.setGoodCount(dimTotal - dimBadcase);
                             dimSummary.setBadcaseCount(dimBadcase);
+                            dimSummary.setUnknownCount(0);
                             dimSummary.setBadcaseRate(dimTotal > 0
                                     ? BigDecimal.valueOf(dimBadcase * 100.0 / dimTotal).setScale(2, RoundingMode.HALF_UP)
                                     : BigDecimal.ZERO);
@@ -506,6 +578,8 @@ public class JudgeWorker {
                     List<EvalJudgeResult> dimList = entry.getValue();
                     int dimTotal = dimList.size();
                     int dimBadcase = (int) dimList.stream().filter(j -> j.getIsBadcase() != null && j.getIsBadcase() == 1).count();
+                    int dimGood = (int) dimList.stream().filter(j -> j.getIsBadcase() != null && j.getIsBadcase() == 0).count();
+                    int dimUnknown = dimTotal - dimBadcase - dimGood;
 
                     EvalTaskSummary dimSummary = new EvalTaskSummary();
                     dimSummary.setTaskId(taskId);
@@ -513,7 +587,9 @@ public class JudgeWorker {
                     dimSummary.setPromptId(promptId);
                     dimSummary.setDimension(dim);
                     dimSummary.setTotalCount(dimTotal);
+                    dimSummary.setGoodCount(dimGood);
                     dimSummary.setBadcaseCount(dimBadcase);
+                    dimSummary.setUnknownCount(dimUnknown);
                     dimSummary.setBadcaseRate(dimTotal > 0
                             ? BigDecimal.valueOf(dimBadcase * 100.0 / dimTotal).setScale(2, RoundingMode.HALF_UP)
                             : BigDecimal.ZERO);

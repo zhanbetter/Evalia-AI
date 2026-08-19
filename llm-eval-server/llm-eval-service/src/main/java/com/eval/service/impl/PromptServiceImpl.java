@@ -10,9 +10,11 @@ import com.eval.common.exception.BusinessException;
 import com.eval.common.result.PageResult;
 import com.eval.dao.mapper.EvalModelConfigMapper;
 import com.eval.dao.mapper.EvalPromptMapper;
+import com.eval.dao.mapper.EvalPromptVersionMapper;
 import com.eval.model.dto.PromptDTO;
 import com.eval.model.entity.EvalModelConfig;
 import com.eval.model.entity.EvalPrompt;
+import com.eval.model.entity.EvalPromptVersion;
 import com.eval.service.LlmApiClient;
 import com.eval.service.PromptGenerator;
 import com.eval.service.PromptService;
@@ -22,6 +24,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Objects;
 
 @Slf4j
 @Service
@@ -29,6 +32,7 @@ import java.util.List;
 public class PromptServiceImpl implements PromptService {
 
     private final EvalPromptMapper promptMapper;
+    private final EvalPromptVersionMapper promptVersionMapper;
     private final PromptGenerator promptGenerator;
     private final EvalModelConfigMapper modelConfigMapper;
     private final LlmApiClient llmApiClient;
@@ -58,6 +62,7 @@ public class PromptServiceImpl implements PromptService {
         }
 
         prompt.setStatus(1);
+        prompt.setVersion(1);
         prompt.setCreatedAt(LocalDateTime.now());
         promptMapper.insert(prompt);
         log.info("评测Prompt创建成功: id={}, name={}", prompt.getId(), prompt.getName());
@@ -76,29 +81,68 @@ public class PromptServiceImpl implements PromptService {
     public EvalPrompt update(Long id, PromptDTO dto) {
         EvalPrompt prompt = promptMapper.selectById(id);
         if (prompt == null) throw new BusinessException("Prompt不存在");
-        prompt.setName(dto.getName());
-        prompt.setDescription(dto.getDescription() != null ? dto.getDescription() : "");
-        prompt.setDimensionsConfig(dto.getDimensionsConfig());
-        prompt.setEvaluationMode("reference".equals(dto.getEvaluationMode()) ? "reference" : "quality");
 
-        // 如果有 dimensionsConfig，自动生成 promptTemplate
-        if (StrUtil.isNotBlank(dto.getDimensionsConfig())) {
-            PromptGenerator.DimensionsConfig config = PromptGenerator.DimensionsConfig.fromJson(dto.getDimensionsConfig());
+        // 计算目标值
+        String newName = dto.getName();
+        String newDesc = dto.getDescription() != null ? dto.getDescription() : "";
+        String newDimCfg = dto.getDimensionsConfig();
+        String newMode = "reference".equals(dto.getEvaluationMode()) ? "reference" : "quality";
+        String newTemplate;
+        if (StrUtil.isNotBlank(newDimCfg)) {
+            PromptGenerator.DimensionsConfig config = PromptGenerator.DimensionsConfig.fromJson(newDimCfg);
             if (config != null && config.getDimensions() != null && !config.getDimensions().isEmpty()) {
-                prompt.setPromptTemplate(promptGenerator.generatePrompt(config));
+                newTemplate = promptGenerator.generatePrompt(config);
             } else {
-                prompt.setPromptTemplate(dto.getPromptTemplate() != null ? dto.getPromptTemplate() : "");
+                newTemplate = dto.getPromptTemplate() != null ? dto.getPromptTemplate() : "";
             }
         } else {
             if (StrUtil.isBlank(dto.getPromptTemplate())) {
                 throw new BusinessException("非结构化模式下，评测Prompt不能为空");
             }
-            prompt.setPromptTemplate(dto.getPromptTemplate());
+            newTemplate = dto.getPromptTemplate();
         }
+
+        // 内容是否有实际变化（决定是否升版本）
+        boolean changed = !Objects.equals(newName, prompt.getName())
+                || !Objects.equals(newDesc, StrUtil.nullToEmpty(prompt.getDescription()))
+                || !Objects.equals(newDimCfg, prompt.getDimensionsConfig())
+                || !Objects.equals(newMode, prompt.getEvaluationMode())
+                || !Objects.equals(newTemplate, prompt.getPromptTemplate());
+
+        if (changed) {
+            // 把旧版本快照到 eval_prompt_version，再升版本号
+            int oldVersion = prompt.getVersion() != null ? prompt.getVersion() : 1;
+            EvalPromptVersion snapshot = new EvalPromptVersion();
+            snapshot.setPromptId(prompt.getId());
+            snapshot.setVersion(oldVersion);
+            snapshot.setName(prompt.getName());
+            snapshot.setDescription(StrUtil.nullToEmpty(prompt.getDescription()));
+            snapshot.setPromptTemplate(prompt.getPromptTemplate());
+            snapshot.setDimensionsConfig(prompt.getDimensionsConfig());
+            snapshot.setEvaluationMode(prompt.getEvaluationMode());
+            snapshot.setCreatedAt(LocalDateTime.now());
+            promptVersionMapper.insert(snapshot);
+            prompt.setVersion(oldVersion + 1);
+            log.info("评估器版本化: id={}, v{} -> v{}", prompt.getId(), oldVersion, oldVersion + 1);
+        }
+
+        prompt.setName(newName);
+        prompt.setDescription(newDesc);
+        prompt.setDimensionsConfig(newDimCfg);
+        prompt.setEvaluationMode(newMode);
+        prompt.setPromptTemplate(newTemplate);
 
         promptMapper.updateById(prompt);
         log.info("评测Prompt更新成功: id={}, name={}", prompt.getId(), prompt.getName());
         return prompt;
+    }
+
+    @Override
+    public List<EvalPromptVersion> listVersions(Long promptId) {
+        return promptVersionMapper.selectList(
+                new LambdaQueryWrapper<EvalPromptVersion>()
+                        .eq(EvalPromptVersion::getPromptId, promptId)
+                        .orderByDesc(EvalPromptVersion::getVersion));
     }
 
     @Override

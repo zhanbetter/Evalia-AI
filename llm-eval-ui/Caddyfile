@@ -1,0 +1,17 @@
+# Evalia-AI 生产 Caddy 配置
+# 由环境变量 DOMAIN 指定域名，Caddy 自动申请/续期 Let's Encrypt 证书
+{$DOMAIN:localhost} {
+	encode zstd gzip
+
+	# 后端 API 反向代理（backend 为 docker compose 服务名）
+	handle /api/* {
+		reverse_proxy backend:8080
+	}
+
+	# 前端静态资源（SPA 路由回退到 index.html）
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}

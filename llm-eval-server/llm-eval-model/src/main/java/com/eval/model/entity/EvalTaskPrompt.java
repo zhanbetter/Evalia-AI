@@ -22,4 +22,16 @@ public class EvalTaskPrompt implements Serializable {
 
     /** 评测Prompt ID */
     private Long promptId;
+
+    /** 创建任务时评估器版本快照 */
+    private Integer promptVersion;
+
+    /** 评估器名称快照 */
+    private String promptName;
+
+    /** 评估Prompt模板快照（JudgeWorker优先使用，不受评估器后续编辑影响） */
+    private String promptTemplate;
+
+    /** 维度配置JSON快照（含 strict_output） */
+    private String dimensionsConfig;
 }
