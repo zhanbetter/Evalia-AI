@@ -121,6 +121,7 @@
 
 <script>
 import axios from 'axios'
+import { promptApi } from '../../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 export default {
@@ -171,17 +172,17 @@ export default {
     async viewVersions(p) {
       this.selectedPrompt = p; this.versions = []; this.showVersions = true; this.versionsLoading = true
       try {
-        const { data } = await axios.get(`/api/prompts/${p.id}/versions`)
-        if (data.code === 200) this.versions = data.data || []
+        const res = await promptApi.listVersions(p.id)
+        this.versions = res.data || []
       } catch { ElMessage.error('加载版本历史失败') }
       finally { this.versionsLoading = false }
     },
 
     async goVersion(v) {
       try {
-        const { data } = await axios.get(`/api/prompts/${this.selectedPrompt.id}/versions/${v.version}`)
-        if (data.code === 200) {
-          this.versionPreviewData = data.data
+        const res = await promptApi.getVersion(this.selectedPrompt.id, v.version)
+        if (res.data) {
+          this.versionPreviewData = res.data
           this.versionActionId = v.version
           this.showVersions = false; this.showVersionPreview = true
         }
@@ -191,9 +192,10 @@ export default {
     async restoreVersion() {
       this.restoring = true
       try {
-        const { data } = await axios.post(`/api/prompts/${this.selectedPrompt.id}/versions/${this.versionActionId}/restore`)
-        if (data.code === 200) { ElMessage.success('版本已恢复'); this.showVersionPreview = false; this.loadPrompts(this.currentPage) }
-        else { ElMessage.error(data.message || '恢复失败') }
+        await promptApi.restoreVersion(this.selectedPrompt.id, this.versionActionId)
+        ElMessage.success('版本已恢复')
+        this.showVersionPreview = false
+        this.loadPrompts(this.currentPage)
       } catch (e) { ElMessage.error(e.response?.data?.message || '恢复失败') }
       finally { this.restoring = false }
     },

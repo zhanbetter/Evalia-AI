@@ -146,6 +146,49 @@ public class PromptServiceImpl implements PromptService {
     }
 
     @Override
+    public EvalPromptVersion getVersion(Long promptId, Integer version) {
+        return promptVersionMapper.selectOne(
+                new LambdaQueryWrapper<EvalPromptVersion>()
+                        .eq(EvalPromptVersion::getPromptId, promptId)
+                        .eq(EvalPromptVersion::getVersion, version));
+    }
+
+    @Override
+    public EvalPrompt restoreVersion(Long promptId, Integer version) {
+        // 1. 查历史快照
+        EvalPromptVersion snapshot = getVersion(promptId, version);
+        if (snapshot == null) throw new BusinessException("历史版本不存在");
+
+        // 2. 查当前评估器
+        EvalPrompt prompt = promptMapper.selectById(promptId);
+        if (prompt == null) throw new BusinessException("评估器不存在");
+
+        // 3. 把当前版本快照（防止丢失当前未版本化的内容）
+        EvalPromptVersion currentSnapshot = new EvalPromptVersion();
+        currentSnapshot.setPromptId(prompt.getId());
+        currentSnapshot.setVersion(prompt.getVersion());
+        currentSnapshot.setName(prompt.getName());
+        currentSnapshot.setDescription(StrUtil.nullToEmpty(prompt.getDescription()));
+        currentSnapshot.setPromptTemplate(prompt.getPromptTemplate());
+        currentSnapshot.setDimensionsConfig(prompt.getDimensionsConfig());
+        currentSnapshot.setEvaluationMode(prompt.getEvaluationMode());
+        currentSnapshot.setCreatedAt(LocalDateTime.now());
+        promptVersionMapper.insert(currentSnapshot);
+
+        // 4. 用快照内容覆盖当前评估器，版本号自增
+        prompt.setName(snapshot.getName());
+        prompt.setDescription(snapshot.getDescription());
+        prompt.setPromptTemplate(snapshot.getPromptTemplate());
+        prompt.setDimensionsConfig(snapshot.getDimensionsConfig());
+        prompt.setEvaluationMode(snapshot.getEvaluationMode());
+        prompt.setVersion(prompt.getVersion() + 1);
+        promptMapper.updateById(prompt);
+
+        log.info("评估器版本恢复: id={}, 恢复到 v{}, 当前升至 v{}", promptId, version, prompt.getVersion());
+        return prompt;
+    }
+
+    @Override
     public void deleteById(Long id) {
         promptMapper.deleteById(id);
     }

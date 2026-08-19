@@ -54,6 +54,20 @@ public class PromptController {
         return Result.success(promptService.listVersions(id));
     }
 
+    /** 获取单个历史版本详情 */
+    @GetMapping("/{id}/versions/{version}")
+    public Result<com.eval.model.entity.EvalPromptVersion> getVersion(@PathVariable Long id, @PathVariable Integer version) {
+        com.eval.model.entity.EvalPromptVersion v = promptService.getVersion(id, version);
+        if (v == null) return Result.success(null);
+        return Result.success(v);
+    }
+
+    /** 恢复到指定历史版本 */
+    @PostMapping("/{id}/versions/{version}/restore")
+    public Result<com.eval.model.entity.EvalPrompt> restoreVersion(@PathVariable Long id, @PathVariable Integer version) {
+        return Result.success(promptService.restoreVersion(id, version));
+    }
+
     /** 解析Prompt模板中的占位符，支持 ${xxx} 和 {xxx} 两种格式 */
     @GetMapping("/parse-placeholders")
     public Result<java.util.List<String>> parsePlaceholders(@RequestParam String template) {

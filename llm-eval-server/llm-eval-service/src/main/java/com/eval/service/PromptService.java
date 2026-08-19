@@ -22,6 +22,12 @@ public interface PromptService {
     /** 评估器版本历史（旧版本快照，新版本在前） */
     List<EvalPromptVersion> listVersions(Long promptId);
 
+    /** 获取单个历史版本详情 */
+    EvalPromptVersion getVersion(Long promptId, Integer version);
+
+    /** 恢复到指定历史版本（内容回写 + 版本号自增） */
+    EvalPrompt restoreVersion(Long promptId, Integer version);
+
     /**
      * AI 润色评估器维度配置
      * @param modelId 用于润色的模型ID（复用已配置的模型）
