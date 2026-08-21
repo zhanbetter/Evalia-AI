@@ -1,0 +1,2759 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Evalia-AI 评测平台 API",
+    "description": "LLM 自动评测平台后端接口。大部分接口需要 JWT Bearer Token 鉴权，登录后在 Swagger UI 右上角 Authorize 按钮填入 token 即可。\n\n## 通用响应格式\n所有接口返回 `Result<T>` 包装：\n```json\n{ \"code\": 200, \"message\": \"success\", \"data\": T }\n```\n分页接口返回 `Result<PageResult<T>>`：\n```json\n{ \"code\": 200, \"message\": \"success\", \"data\": { \"records\": [...], \"total\": 100, \"page\": 1, \"size\": 20 } }\n```",
+    "version": "1.0.0",
+    "contact": { "name": "Evalia-AI" }
+  },
+  "servers": [
+    { "url": "http://localhost:8080/api", "description": "本地开发" }
+  ],
+  "tags": [
+    { "name": "认证", "description": "注册 / 登录 / 用户信息" },
+    { "name": "模型管理", "description": "模型配置 CRUD + 连通性测试" },
+    { "name": "数据集", "description": "数据集上传 / 条目管理 / Schema / 金标准标注" },
+    { "name": "评估器", "description": "评估器(Prompt) CRUD / 版本历史 / AI 润色 / 占位符解析" },
+    { "name": "评测任务", "description": "任务创建 / 启动 / 取消 / 进度" },
+    { "name": "评测结果", "description": "结果查询 / 汇总 / Badcase / 维度分析 / 人机对比" },
+    { "name": "人工标注", "description": "人工审核提交 / 统计 / 样本列表 / 专家裁决" },
+    { "name": "报告", "description": "HTML 报告预览 / 下载" },
+    { "name": "异步任务", "description": "异步任务状态轮询" },
+    { "name": "知识库", "description": "文章管理 / RSS 订阅源" },
+    { "name": " Playground", "description": "在线 Prompt 调试" }
+  ],
+  "paths": {
+    "/auth/register": {
+      "post": {
+        "tags": ["认证"],
+        "summary": "注册",
+        "description": "使用邀请码注册新用户，成功后返回 JWT Token。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RegisterDTO" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "注册成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": { "$ref": "#/components/schemas/LoginVO" }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "tags": ["认证"],
+        "summary": "登录",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/LoginDTO" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "登录成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": { "$ref": "#/components/schemas/LoginVO" }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "tags": ["认证"],
+        "summary": "获取当前用户信息",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": { "$ref": "#/components/schemas/AuthUserVO" }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "tags": ["认证"],
+        "summary": "退出登录",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": { "description": "成功" }
+        }
+      }
+    },
+    "/models": {
+      "post": {
+        "tags": ["模型管理"],
+        "summary": "创建模型",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ModelConfigDTO" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/EvalModelConfig" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": ["模型管理"],
+        "summary": "模型列表",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "page", "in": "query", "schema": { "type": "integer", "default": 1 } },
+          { "name": "size", "in": "query", "schema": { "type": "integer", "default": 10 } },
+          { "name": "modelType", "in": "query", "description": "筛选类型: evaluated / judge / both", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/PageResult_EvalModelConfig" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/models/{id}": {
+      "put": {
+        "tags": ["模型管理"],
+        "summary": "更新模型",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ModelConfigDTO" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/EvalModelConfig" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": ["模型管理"],
+        "summary": "删除模型（仅创建者或管理员）",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": { "description": "成功" }
+        }
+      }
+    },
+    "/models/{id}/test": {
+      "post": {
+        "tags": ["模型管理"],
+        "summary": "测试模型连通性",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功返回测试结果文本",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "type": "string" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/datasets/preview": {
+      "post": {
+        "tags": ["数据集"],
+        "summary": "上传预览（解析文件列名 + 前几行 + 推荐映射）",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": { "type": "string", "format": "binary", "description": "JSON/CSV/XLSX 文件" }
+                },
+                "required": ["file"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功返回预览数据（列名、前几行、推荐映射）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "type": "object", "description": "动态结构: { columns, rows, suggestedMapping }" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/datasets/upload": {
+      "post": {
+        "tags": ["数据集"],
+        "summary": "上传数据集",
+        "description": "parentId 为空 = 新建数据集（同名拒绝）；parentId 有值 = 为该数据集提交新版本（允许同名升版本）",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": { "type": "string", "format": "binary" },
+                  "name": { "type": "string" },
+                  "description": { "type": "string" },
+                  "hasReference": { "type": "integer", "description": "1-有参考答案, 0-无" },
+                  "hasModelResponse": { "type": "integer", "description": "1-有模型回答, 0-无" },
+                  "schemaFields": { "type": "string", "description": "SchemaFieldDTO[] 的 JSON 字符串" },
+                  "columnMapping": { "type": "string", "description": "列映射 JSON 字符串" },
+                  "parentId": { "type": "integer", "format": "int64", "description": "父数据集 ID（升版本时传）" }
+                },
+                "required": ["file", "name"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/EvalDataset" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/datasets": {
+      "get": {
+        "tags": ["数据集"],
+        "summary": "数据集列表",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "page", "in": "query", "schema": { "type": "integer", "default": 1 } },
+          { "name": "size", "in": "query", "schema": { "type": "integer", "default": 10 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/PageResult_EvalDataset" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/datasets/{id}": {
+      "get": {
+        "tags": ["数据集"],
+        "summary": "数据集详情",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/EvalDataset" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": ["数据集"],
+        "summary": "更新数据集基本信息",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string" },
+                  "description": { "type": "string" },
+                  "hasReference": { "type": "integer" },
+                  "hasModelResponse": { "type": "integer" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/EvalDataset" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": ["数据集"],
+        "summary": "删除数据集（仅创建者或管理员）",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": { "description": "成功" }
+        }
+      }
+    },
+    "/datasets/{id}/items": {
+      "get": {
+        "tags": ["数据集"],
+        "summary": "数据集条目列表",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } },
+          { "name": "page", "in": "query", "schema": { "type": "integer", "default": 1 } },
+          { "name": "size", "in": "query", "schema": { "type": "integer", "default": 20 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/PageResult_EvalDatasetItem" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["数据集"],
+        "summary": "手动添加条目",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DatasetItemDTO" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/EvalDatasetItem" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/datasets/items/batch": {
+      "get": {
+        "tags": ["数据集"],
+        "summary": "批量查询条目（按 ID 列表）",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "ids", "in": "query", "required": true, "schema": { "type": "array", "items": { "type": "integer", "format": "int64" } }, "style": "form", "explode": true }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/EvalDatasetItem" } } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/datasets/items/{itemId}": {
+      "put": {
+        "tags": ["数据集"],
+        "summary": "编辑条目",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "itemId", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DatasetItemDTO" } } }
+        },
+        "responses": {
+          "200": { "description": "成功" }
+        }
+      },
+      "delete": {
+        "tags": ["数据集"],
+        "summary": "删除条目（沿用所属数据集的删除保护）",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "itemId", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": { "description": "成功" }
+        }
+      }
+    },
+    "/datasets/{id}/items/batch-delete": {
+      "post": {
+        "tags": ["数据集"],
+        "summary": "批量删除条目",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "array", "items": { "type": "integer", "format": "int64" } } } }
+        },
+        "responses": {
+          "200": { "description": "成功" }
+        }
+      }
+    },
+    "/datasets/{id}/schema": {
+      "get": {
+        "tags": ["数据集"],
+        "summary": "获取 Schema",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/EvalDatasetSchema" } } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": ["数据集"],
+        "summary": "更新 Schema",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/SchemaFieldDTO" } } } }
+        },
+        "responses": {
+          "200": { "description": "成功" }
+        }
+      }
+    },
+    "/datasets/versions": {
+      "get": {
+        "tags": ["数据集"],
+        "summary": "获取数据集版本列表（按名称）",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "name", "in": "query", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/EvalDataset" } } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/datasets/check-name": {
+      "get": {
+        "tags": ["数据集"],
+        "summary": "检测数据集名称占用",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "name", "in": "query", "required": true, "schema": { "type": "string" } },
+          { "name": "excludeId", "in": "query", "schema": { "type": "integer", "format": "int64" } },
+          { "name": "excludeName", "in": "query", "schema": { "type": "string" } },
+          { "name": "targetVersion", "in": "query", "schema": { "type": "integer" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/NameCheckResult" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/datasets/{id}/eval-history": {
+      "get": {
+        "tags": ["数据集"],
+        "summary": "获取数据集评测历史",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/DatasetEvalHistoryVO" } } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/datasets/{id}/detect-duplicates": {
+      "post": {
+        "tags": ["数据集"],
+        "summary": "数据重复检测（异步任务）",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } },
+          { "name": "fieldName", "in": "query", "schema": { "type": "string", "default": "question" } },
+          { "name": "threshold", "in": "query", "schema": { "type": "number", "default": 0.8 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "返回异步任务信息，轮询 GET /api/async-jobs/{id}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/AsyncJobVO" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/datasets/{id}/gold-annotations/annotate": {
+      "post": {
+        "tags": ["数据集"],
+        "summary": "金标准标注（同一标注者对同一条目 upsert）",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GoldAnnotateDTO" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/EvalGoldAnnotation" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/datasets/{id}/gold-annotations": {
+      "get": {
+        "tags": ["数据集"],
+        "summary": "数据集标注条目列表（分页，含投片统计与多数表决）",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } },
+          { "name": "page", "in": "query", "schema": { "type": "integer", "default": 1 } },
+          { "name": "size", "in": "query", "schema": { "type": "integer", "default": 20 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/PageResult_GoldAnnotationItemVO" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/datasets/{id}/gold-annotations/stats": {
+      "get": {
+        "tags": ["数据集"],
+        "summary": "金标准标注一致性统计",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/GoldAnnotationStatsVO" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/datasets/{id}/gold-annotations/{itemId}": {
+      "delete": {
+        "tags": ["数据集"],
+        "summary": "删除某标注者对某条目的标注",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } },
+          { "name": "itemId", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } },
+          { "name": "annotator", "in": "query", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "成功" }
+        }
+      }
+    },
+    "/prompts": {
+      "post": {
+        "tags": ["评估器"],
+        "summary": "创建评估器",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PromptDTO" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/EvalPrompt" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": ["评估器"],
+        "summary": "评估器列表",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "page", "in": "query", "schema": { "type": "integer", "default": 1 } },
+          { "name": "size", "in": "query", "schema": { "type": "integer", "default": 10 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/PageResult_EvalPrompt" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/prompts/check-name": {
+      "get": {
+        "tags": ["评估器"],
+        "summary": "检测评估器名称是否已被占用（全局唯一）",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "name", "in": "query", "required": true, "schema": { "type": "string" } },
+          { "name": "excludeId", "in": "query", "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/NameCheckResult" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/prompts/{id}": {
+      "get": {
+        "tags": ["评估器"],
+        "summary": "评估器详情",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/EvalPrompt" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": ["评估器"],
+        "summary": "更新评估器（自动创建版本快照）",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PromptDTO" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/EvalPrompt" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": ["评估器"],
+        "summary": "删除评估器（仅创建者或管理员）",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": { "description": "成功" }
+        }
+      }
+    },
+    "/prompts/{id}/versions": {
+      "get": {
+        "tags": ["评估器"],
+        "summary": "评估器版本历史（快照列表，新版本在前）",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/EvalPromptVersion" } } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/prompts/{id}/versions/{version}": {
+      "get": {
+        "tags": ["评估器"],
+        "summary": "获取单个历史版本详情",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } },
+          { "name": "version", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/EvalPromptVersion" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/prompts/{id}/versions/{version}/restore": {
+      "post": {
+        "tags": ["评估器"],
+        "summary": "恢复到指定历史版本",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } },
+          { "name": "version", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/EvalPrompt" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/prompts/parse-placeholders": {
+      "get": {
+        "tags": ["评估器"],
+        "summary": "解析模板占位符（支持 ${xxx} 和 {xxx}）",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "template", "in": "query", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "type": "array", "items": { "type": "string" } } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/prompts/preview": {
+      "post": {
+        "tags": ["评估器"],
+        "summary": "预览：根据 dimensions_config 自动生成的 Prompt 文本",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PromptDTO" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "type": "string" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/prompts/polish": {
+      "post": {
+        "tags": ["评估器"],
+        "summary": "AI 润色评估器维度配置（异步任务）",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "modelId": { "type": "integer", "format": "int64", "description": "用于润色的 AI 模型 ID" },
+                  "dimensionsConfig": { "type": "string", "description": "维度配置 JSON 字符串" }
+                },
+                "required": ["dimensionsConfig"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "返回异步任务信息",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/AsyncJobVO" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/prompts/parse-to-dimensions": {
+      "post": {
+        "tags": ["评估器"],
+        "summary": "将自然语言评测标准识别为结构化维度配置（异步任务）",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "modelId": { "type": "integer", "format": "int64" },
+                  "text": { "type": "string", "description": "自然语言描述的评测标准" }
+                },
+                "required": ["text"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "返回异步任务信息",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/AsyncJobVO" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks": {
+      "post": {
+        "tags": ["评测任务"],
+        "summary": "创建评测任务",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EvalTaskDTO" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/EvalTask" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": ["评测任务"],
+        "summary": "任务列表",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "page", "in": "query", "schema": { "type": "integer", "default": 1 } },
+          { "name": "size", "in": "query", "schema": { "type": "integer", "default": 10 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/PageResult_EvalTask" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/{id}": {
+      "get": {
+        "tags": ["评测任务"],
+        "summary": "任务详情",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/EvalTask" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/{id}/start": {
+      "post": {
+        "tags": ["评测任务"],
+        "summary": "启动任务",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": { "description": "成功" }
+        }
+      }
+    },
+    "/tasks/{id}/cancel": {
+      "post": {
+        "tags": ["评测任务"],
+        "summary": "取消任务",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": { "description": "成功" }
+        }
+      }
+    },
+    "/tasks/{id}/progress": {
+      "get": {
+        "tags": ["评测任务"],
+        "summary": "查询任务进度（0-100）",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "type": "integer" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/results": {
+      "get": {
+        "tags": ["评测结果"],
+        "summary": "结果列表（分页）",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "taskId", "in": "query", "schema": { "type": "integer", "format": "int64" } },
+          { "name": "modelConfigId", "in": "query", "schema": { "type": "integer", "format": "int64" } },
+          { "name": "page", "in": "query", "schema": { "type": "integer", "default": 1 } },
+          { "name": "size", "in": "query", "schema": { "type": "integer", "default": 20 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/PageResult_EvalResult" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/results/compare": {
+      "get": {
+        "tags": ["评测结果"],
+        "summary": "多模型结果对比",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "taskId", "in": "query", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/EvalResult" } } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/results/compare-with-judge": {
+      "get": {
+        "tags": ["评测结果"],
+        "summary": "版本对比（含裁判维度判定）",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "taskId", "in": "query", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/ModelCompareVO" } } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/results/{taskId}/summary": {
+      "get": {
+        "tags": ["评测结果"],
+        "summary": "汇总统计（整体 + 按维度）",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "taskId", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/EvalTaskSummary" } } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/results/{taskId}/badcases": {
+      "get": {
+        "tags": ["评测结果"],
+        "summary": "Badcase 列表（分页，支持多维筛选）",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "taskId", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } },
+          { "name": "promptId", "in": "query", "schema": { "type": "integer", "format": "int64" } },
+          { "name": "modelConfigId", "in": "query", "schema": { "type": "integer", "format": "int64" } },
+          { "name": "dimension", "in": "query", "schema": { "type": "string" } },
+          { "name": "keyword", "in": "query", "schema": { "type": "string" } },
+          { "name": "page", "in": "query", "schema": { "type": "integer", "default": 1 } },
+          { "name": "size", "in": "query", "schema": { "type": "integer", "default": 20 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/PageResult_BadcaseVO" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/results/{taskId}/judge-results": {
+      "get": {
+        "tags": ["评测结果"],
+        "summary": "Judge 结果查询（全部判定记录）",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "taskId", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } },
+          { "name": "promptId", "in": "query", "schema": { "type": "integer", "format": "int64" } },
+          { "name": "modelConfigId", "in": "query", "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/BadcaseVO" } } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/results/{taskId}/dimension-results": {
+      "get": {
+        "tags": ["评测结果"],
+        "summary": "维度结果（单维度判定记录）",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "taskId", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } },
+          { "name": "modelConfigId", "in": "query", "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/BadcaseVO" } } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/results/human-review": {
+      "post": {
+        "tags": ["人工标注"],
+        "summary": "提交人工标注",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/HumanReviewDTO" } } }
+        },
+        "responses": {
+          "200": { "description": "成功" }
+        }
+      }
+    },
+    "/results/{taskId}/human-review/stats": {
+      "get": {
+        "tags": ["人工标注"],
+        "summary": "人工审核统计（人机一致率、人人一致率、Fleiss Kappa）",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "taskId", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } },
+          { "name": "modelConfigId", "in": "query", "schema": { "type": "integer", "format": "int64" } },
+          { "name": "promptId", "in": "query", "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/HumanReviewStatsVO" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/results/{taskId}/human-review/samples": {
+      "get": {
+        "tags": ["人工标注"],
+        "summary": "人工审核样本列表（分页）",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "taskId", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } },
+          { "name": "promptId", "in": "query", "schema": { "type": "integer", "format": "int64" } },
+          { "name": "modelConfigId", "in": "query", "schema": { "type": "integer", "format": "int64" } },
+          { "name": "reviewer", "in": "query", "schema": { "type": "string" } },
+          { "name": "role", "in": "query", "schema": { "type": "string" } },
+          { "name": "page", "in": "query", "schema": { "type": "integer", "default": 1 } },
+          { "name": "size", "in": "query", "schema": { "type": "integer", "default": 20 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/BadcaseVO" } } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/results/{taskId}/adjudication/samples": {
+      "get": {
+        "tags": ["人工标注"],
+        "summary": "专家裁决样本列表（需 ≥2 人标注且有分歧）",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "taskId", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } },
+          { "name": "promptId", "in": "query", "schema": { "type": "integer", "format": "int64" } },
+          { "name": "modelConfigId", "in": "query", "schema": { "type": "integer", "format": "int64" } },
+          { "name": "page", "in": "query", "schema": { "type": "integer", "default": 1 } },
+          { "name": "size", "in": "query", "schema": { "type": "integer", "default": 20 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/BadcaseVO" } } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/results/adjudicate": {
+      "post": {
+        "tags": ["人工标注"],
+        "summary": "专家裁决（终审判定）",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AdjudicationDTO" } } }
+        },
+        "responses": {
+          "200": { "description": "成功" }
+        }
+      }
+    },
+    "/results/{taskId}/human-vs-ai/stats": {
+      "get": {
+        "tags": ["评测结果"],
+        "summary": "人机对比统计（AI vs 金标准）",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "taskId", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } },
+          { "name": "modelConfigId", "in": "query", "schema": { "type": "integer", "format": "int64" } },
+          { "name": "promptId", "in": "query", "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/HumanVsAiStatsVO" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/results/{taskId}/human-vs-ai/samples": {
+      "get": {
+        "tags": ["评测结果"],
+        "summary": "人机对比样本列表",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "taskId", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } },
+          { "name": "promptId", "in": "query", "schema": { "type": "integer", "format": "int64" } },
+          { "name": "modelConfigId", "in": "query", "schema": { "type": "integer", "format": "int64" } },
+          { "name": "page", "in": "query", "schema": { "type": "integer", "default": 1 } },
+          { "name": "size", "in": "query", "schema": { "type": "integer", "default": 20 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/BadcaseVO" } } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/reports/{taskId}/preview": {
+      "get": {
+        "tags": ["报告"],
+        "summary": "HTML 报告预览",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "taskId", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "HTML 内容",
+            "content": { "text/html": { "schema": { "type": "string" } } }
+          }
+        }
+      }
+    },
+    "/reports/{taskId}/html": {
+      "get": {
+        "tags": ["报告"],
+        "summary": "HTML 报告（JSON 包装，供前端渲染）",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "taskId", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "type": "string", "description": "HTML 内容字符串" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/reports/{taskId}/download": {
+      "get": {
+        "tags": ["报告"],
+        "summary": "下载 HTML 报告文件",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "taskId", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "HTML 文件下载",
+            "content": { "text/html": { "schema": { "type": "string", "format": "binary" } } }
+          }
+        }
+      }
+    },
+    "/async-jobs/{id}": {
+      "get": {
+        "tags": ["异步任务"],
+        "summary": "查询异步任务状态",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/AsyncJobVO" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/async-jobs/{id}/result": {
+      "get": {
+        "tags": ["异步任务"],
+        "summary": "获取异步任务结果（完成后调用）",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功，data 为任务类型的专属结果结构",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "type": "object", "description": "异步任务类型相关的结构化结果" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/articles": {
+      "get": {
+        "tags": ["知识库"],
+        "summary": "文章列表",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "page", "in": "query", "schema": { "type": "integer", "default": 1 } },
+          { "name": "size", "in": "query", "schema": { "type": "integer", "default": 10 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/PageResult_EvalArticle" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["知识库"],
+        "summary": "手动添加文章",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/EvalArticle" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/EvalArticle" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/articles/{id}": {
+      "get": {
+        "tags": ["知识库"],
+        "summary": "文章详情",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/EvalArticle" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": ["知识库"],
+        "summary": "删除文章",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": { "description": "成功" }
+        }
+      }
+    },
+    "/articles/fetch": {
+      "post": {
+        "tags": ["知识库"],
+        "summary": "从 RSS 源拉取文章",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "feedUrl", "in": "query", "required": true, "schema": { "type": "string" } },
+          { "name": "sourceName", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功返回新增文章数",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "type": "integer" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/articles/import": {
+      "post": {
+        "tags": ["知识库"],
+        "summary": "导入单篇文章（URL）",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "url", "in": "query", "required": true, "schema": { "type": "string" } },
+          { "name": "sourceName", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "type": "boolean" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/articles/{id}/summary": {
+      "post": {
+        "tags": ["知识库"],
+        "summary": "AI 生成文章摘要",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } },
+          { "name": "modelConfigId", "in": "query", "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功返回摘要文本",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "type": "string" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/articles/{id}/repair": {
+      "post": {
+        "tags": ["知识库"],
+        "summary": "修复单篇文章",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "type": "string" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/articles/repair-all": {
+      "post": {
+        "tags": ["知识库"],
+        "summary": "修复所有文章",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": { "description": "成功" }
+        }
+      }
+    },
+    "/rss-sources": {
+      "get": {
+        "tags": ["知识库"],
+        "summary": "RSS 订阅源列表",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/EvalRssSource" } } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["知识库"],
+        "summary": "新增订阅源",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sourceName": { "type": "string" },
+                  "feedUrl": { "type": "string" },
+                  "description": { "type": "string" }
+                },
+                "required": ["sourceName", "feedUrl"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/EvalRssSource" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/rss-sources/{id}": {
+      "delete": {
+        "tags": ["知识库"],
+        "summary": "删除订阅源",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": { "description": "成功" }
+        }
+      }
+    },
+    "/rss-sources/{id}/enabled": {
+      "put": {
+        "tags": ["知识库"],
+        "summary": "启用/停用订阅源",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "enabled": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "成功" }
+        }
+      }
+    },
+    "/rss-sources/{id}/fetch": {
+      "post": {
+        "tags": ["知识库"],
+        "summary": "手动拉取指定订阅源",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功返回新增文章数",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "type": "integer" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/rss-sources/fetch-all": {
+      "post": {
+        "tags": ["知识库"],
+        "summary": "拉取全部启用的订阅源",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "成功返回新增总数",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "type": "integer" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/playground/run": {
+      "post": {
+        "tags": [" Playground"],
+        "summary": "在线调试 Prompt",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/PlaygroundRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "type": "object", "properties": { "data": { "type": "object", "description": "模型原始返回内容" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT Token — 通过 POST /api/auth/login 获取"
+      }
+    },
+    "schemas": {
+      "Result": {
+        "type": "object",
+        "properties": {
+          "code": { "type": "integer", "description": "200=成功，其他=失败" },
+          "message": { "type": "string" },
+          "data": { "description": "业务数据（泛型）" }
+        }
+      },
+      "PageResult_EvalModelConfig": {
+        "type": "object",
+        "properties": {
+          "records": { "type": "array", "items": { "$ref": "#/components/schemas/EvalModelConfig" } },
+          "total": { "type": "integer", "format": "int64" },
+          "page": { "type": "integer", "format": "int64" },
+          "size": { "type": "integer", "format": "int64" }
+        }
+      },
+      "PageResult_EvalDataset": {
+        "type": "object",
+        "properties": {
+          "records": { "type": "array", "items": { "$ref": "#/components/schemas/EvalDataset" } },
+          "total": { "type": "integer", "format": "int64" },
+          "page": { "type": "integer", "format": "int64" },
+          "size": { "type": "integer", "format": "int64" }
+        }
+      },
+      "PageResult_EvalDatasetItem": {
+        "type": "object",
+        "properties": {
+          "records": { "type": "array", "items": { "$ref": "#/components/schemas/EvalDatasetItem" } },
+          "total": { "type": "integer", "format": "int64" },
+          "page": { "type": "integer", "format": "int64" },
+          "size": { "type": "integer", "format": "int64" }
+        }
+      },
+      "PageResult_EvalPrompt": {
+        "type": "object",
+        "properties": {
+          "records": { "type": "array", "items": { "$ref": "#/components/schemas/EvalPrompt" } },
+          "total": { "type": "integer", "format": "int64" },
+          "page": { "type": "integer", "format": "int64" },
+          "size": { "type": "integer", "format": "int64" }
+        }
+      },
+      "PageResult_EvalTask": {
+        "type": "object",
+        "properties": {
+          "records": { "type": "array", "items": { "$ref": "#/components/schemas/EvalTask" } },
+          "total": { "type": "integer", "format": "int64" },
+          "page": { "type": "integer", "format": "int64" },
+          "size": { "type": "integer", "format": "int64" }
+        }
+      },
+      "PageResult_EvalResult": {
+        "type": "object",
+        "properties": {
+          "records": { "type": "array", "items": { "$ref": "#/components/schemas/EvalResult" } },
+          "total": { "type": "integer", "format": "int64" },
+          "page": { "type": "integer", "format": "int64" },
+          "size": { "type": "integer", "format": "int64" }
+        }
+      },
+      "PageResult_BadcaseVO": {
+        "type": "object",
+        "properties": {
+          "records": { "type": "array", "items": { "$ref": "#/components/schemas/BadcaseVO" } },
+          "total": { "type": "integer", "format": "int64" },
+          "page": { "type": "integer", "format": "int64" },
+          "size": { "type": "integer", "format": "int64" }
+        }
+      },
+      "PageResult_EvalArticle": {
+        "type": "object",
+        "properties": {
+          "records": { "type": "array", "items": { "$ref": "#/components/schemas/EvalArticle" } },
+          "total": { "type": "integer", "format": "int64" },
+          "page": { "type": "integer", "format": "int64" },
+          "size": { "type": "integer", "format": "int64" }
+        }
+      },
+      "PageResult_GoldAnnotationItemVO": {
+        "type": "object",
+        "properties": {
+          "records": { "type": "array", "items": { "$ref": "#/components/schemas/GoldAnnotationItemVO" } },
+          "total": { "type": "integer", "format": "int64" },
+          "page": { "type": "integer", "format": "int64" },
+          "size": { "type": "integer", "format": "int64" }
+        }
+      },
+      "RegisterDTO": {
+        "type": "object",
+        "required": ["username", "password"],
+        "properties": {
+          "username": { "type": "string" },
+          "password": { "type": "string" },
+          "nickname": { "type": "string" },
+          "inviteCode": { "type": "string", "description": "注册邀请码" }
+        }
+      },
+      "LoginDTO": {
+        "type": "object",
+        "required": ["username", "password"],
+        "properties": {
+          "username": { "type": "string" },
+          "password": { "type": "string" }
+        }
+      },
+      "LoginVO": {
+        "type": "object",
+        "properties": {
+          "token": { "type": "string", "description": "JWT 令牌" },
+          "user": { "$ref": "#/components/schemas/AuthUserVO" }
+        }
+      },
+      "AuthUserVO": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "username": { "type": "string" },
+          "nickname": { "type": "string" },
+          "role": { "type": "string", "description": "ADMIN-管理员 USER-普通用户" }
+        }
+      },
+      "ModelConfigDTO": {
+        "type": "object",
+        "required": ["name", "provider", "apiBase", "apiKey", "modelId"],
+        "properties": {
+          "name": { "type": "string", "description": "模型名称（如 DeepSeek-V3）" },
+          "provider": { "type": "string", "description": "提供商（openai/deepseek/zhipu 等）" },
+          "apiBase": { "type": "string", "description": "API 地址" },
+          "apiKey": { "type": "string", "description": "API Key" },
+          "modelId": { "type": "string", "description": "模型ID（如 deepseek-chat）" },
+          "modelType": { "type": "string", "enum": ["evaluated", "judge", "both"], "description": "模型类型" },
+          "temperature": { "type": "number", "description": "默认温度" },
+          "maxTokens": { "type": "integer", "description": "最大输出 Token" }
+        }
+      },
+      "EvalModelConfig": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "name": { "type": "string" },
+          "provider": { "type": "string" },
+          "apiBase": { "type": "string" },
+          "apiKey": { "type": "string", "description": "API Key（读取时脱敏）" },
+          "modelId": { "type": "string" },
+          "modelType": { "type": "string" },
+          "temperature": { "type": "number" },
+          "maxTokens": { "type": "integer" },
+          "status": { "type": "integer", "description": "1-启用 0-禁用" },
+          "createdBy": { "type": "integer", "format": "int64" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "EvalDataset": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "name": { "type": "string" },
+          "version": { "type": "integer" },
+          "description": { "type": "string" },
+          "filePath": { "type": "string" },
+          "fileType": { "type": "string", "description": "JSON/CSV/XLSX" },
+          "columnMapping": { "type": "string" },
+          "hasReference": { "type": "integer", "description": "1-有参考答案 0-无" },
+          "hasModelResponse": { "type": "integer", "description": "1-有模型回答 0-无" },
+          "totalCount": { "type": "integer" },
+          "createdBy": { "type": "integer", "format": "int64" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "EvalDatasetItem": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "datasetId": { "type": "integer", "format": "int64" },
+          "question": { "type": "string" },
+          "referenceAnswer": { "type": "string" },
+          "context": { "type": "string" },
+          "category": { "type": "string" },
+          "extraFields": { "type": "string", "description": "扩展字段 JSON" },
+          "seqNo": { "type": "integer" }
+        }
+      },
+      "EvalDatasetSchema": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "datasetId": { "type": "integer", "format": "int64" },
+          "fieldName": { "type": "string" },
+          "displayName": { "type": "string" },
+          "fieldType": { "type": "string", "description": "TEXT/NUMBER/ENUM/TAGS" },
+          "description": { "type": "string" },
+          "role": { "type": "string", "description": "QUESTION/REFERENCE/CONTEXT/CATEGORY/CUSTOM" },
+          "required": { "type": "integer" },
+          "sortOrder": { "type": "integer" }
+        }
+      },
+      "DatasetItemDTO": {
+        "type": "object",
+        "required": ["question"],
+        "properties": {
+          "question": { "type": "string" },
+          "referenceAnswer": { "type": "string" },
+          "context": { "type": "string" },
+          "category": { "type": "string" },
+          "extraFields": { "type": "string" }
+        }
+      },
+      "SchemaFieldDTO": {
+        "type": "object",
+        "required": ["fieldName", "role"],
+        "properties": {
+          "fieldName": { "type": "string" },
+          "displayName": { "type": "string" },
+          "fieldType": { "type": "string", "enum": ["TEXT", "NUMBER", "ENUM", "TAGS"] },
+          "description": { "type": "string" },
+          "role": { "type": "string", "enum": ["QUESTION", "REFERENCE", "CONTEXT", "CATEGORY", "CUSTOM"] },
+          "required": { "type": "integer" },
+          "sortOrder": { "type": "integer" }
+        }
+      },
+      "NameCheckResult": {
+        "type": "object",
+        "properties": {
+          "exists": { "type": "boolean", "description": "该名称是否已存在" },
+          "versionCount": { "type": "integer", "description": "当前已存在的版本数量（评估器恒为 1 或 0）" },
+          "latestVersion": { "type": "integer", "description": "已存在的最新版本号" },
+          "nextVersion": { "type": "integer", "description": "下次创建将得到的版本号" },
+          "targetVersionTaken": { "type": "boolean", "description": "目标版本是否已被占用" }
+        }
+      },
+      "DatasetEvalHistoryVO": {
+        "type": "object",
+        "properties": {
+          "taskId": { "type": "integer", "format": "int64" },
+          "taskName": { "type": "string" },
+          "taskVersion": { "type": "integer" },
+          "status": { "type": "string" },
+          "modelName": { "type": "string" },
+          "promptName": { "type": "string" },
+          "totalCount": { "type": "integer" },
+          "badcaseCount": { "type": "integer" },
+          "badcaseRate": { "type": "number" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "PromptDTO": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "description": "Prompt 名称" },
+          "description": { "type": "string" },
+          "promptTemplate": { "type": "string", "description": "评测 Prompt 模板" },
+          "dimensionsConfig": { "type": "string", "description": "维度配置 JSON" },
+          "evaluationMode": { "type": "string", "enum": ["quality", "reference"], "description": "评测模式" }
+        }
+      },
+      "EvalPrompt": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "version": { "type": "integer" },
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "promptTemplate": { "type": "string" },
+          "dimensionsConfig": { "type": "string" },
+          "evaluationMode": { "type": "string" },
+          "status": { "type": "integer", "description": "1-启用 0-禁用" },
+          "createdBy": { "type": "integer", "format": "int64" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "EvalPromptVersion": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "promptId": { "type": "integer", "format": "int64" },
+          "version": { "type": "integer" },
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "promptTemplate": { "type": "string" },
+          "dimensionsConfig": { "type": "string" },
+          "evaluationMode": { "type": "string" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "EvalTaskDTO": {
+        "type": "object",
+        "required": ["name", "datasetId", "modelConfigIds", "promptIds"],
+        "properties": {
+          "name": { "type": "string", "description": "任务名称" },
+          "datasetId": { "type": "integer", "format": "int64" },
+          "judgeModelId": { "type": "integer", "format": "int64", "description": "裁判模型ID（NULL=自动选第一个）" },
+          "answerSource": { "type": "string", "enum": ["dataset", "api"], "description": "回答来源" },
+          "promptTemplate": { "type": "string", "description": "调用被测模型的 Prompt 模板" },
+          "fieldMapping": { "type": "string", "description": "占位符→数据集字段映射 JSON" },
+          "modelConfigIds": { "type": "array", "items": { "type": "integer", "format": "int64" } },
+          "promptIds": { "type": "array", "items": { "type": "integer", "format": "int64" } }
+        }
+      },
+      "EvalTask": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "name": { "type": "string" },
+          "version": { "type": "integer" },
+          "datasetId": { "type": "integer", "format": "int64" },
+          "judgeModelId": { "type": "integer", "format": "int64" },
+          "answerSource": { "type": "string" },
+          "promptTemplate": { "type": "string" },
+          "fieldMapping": { "type": "string" },
+          "status": { "type": "string", "enum": ["PENDING", "RUNNING", "COMPLETED", "FAILED"] },
+          "progress": { "type": "integer" },
+          "shardCount": { "type": "integer" },
+          "createdBy": { "type": "integer", "format": "int64" },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "finishedAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "EvalResult": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "taskId": { "type": "integer", "format": "int64" },
+          "modelConfigId": { "type": "integer", "format": "int64" },
+          "datasetItemId": { "type": "integer", "format": "int64" },
+          "prompt": { "type": "string", "description": "实际发送的 Prompt" },
+          "response": { "type": "string", "description": "模型回复" },
+          "latencyMs": { "type": "integer" },
+          "tokenUsage": { "type": "integer" },
+          "exactMatchScore": { "type": "integer" },
+          "keywordMatchScore": { "type": "integer" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "EvalTaskSummary": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "taskId": { "type": "integer", "format": "int64" },
+          "modelConfigId": { "type": "integer", "format": "int64" },
+          "promptId": { "type": "integer", "format": "int64" },
+          "dimension": { "type": "string", "description": "维度名称（NULL=整体）" },
+          "totalCount": { "type": "integer" },
+          "goodCount": { "type": "integer" },
+          "badcaseCount": { "type": "integer" },
+          "unknownCount": { "type": "integer" },
+          "skipCount": { "type": "integer" },
+          "badcaseRate": { "type": "number" },
+          "avgLatencyMs": { "type": "integer" },
+          "totalTokenUsage": { "type": "integer", "format": "int64" }
+        }
+      },
+      "BadcaseVO": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "taskId": { "type": "integer", "format": "int64" },
+          "modelConfigId": { "type": "integer", "format": "int64" },
+          "datasetItemId": { "type": "integer", "format": "int64" },
+          "promptId": { "type": "integer", "format": "int64" },
+          "dimension": { "type": "string", "description": "评测维度（NULL=整体判定）" },
+          "isBadcase": { "type": "integer", "description": "1-badcase 0-非badcase" },
+          "dimensions": { "type": "string", "description": "AI 判定的维度 JSON 数组" },
+          "reason": { "type": "string", "description": "AI 判定理由" },
+          "parsedResult": { "type": "string", "description": "AI 返回的完整解析结果 JSON" },
+          "judgeStatus": { "type": "string" },
+          "cachedTokens": { "type": "integer" },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "question": { "type": "string", "description": "原始问题" },
+          "referenceAnswer": { "type": "string" },
+          "context": { "type": "string" },
+          "modelResponse": { "type": "string", "description": "被测模型回答" },
+          "extraFields": { "type": "string" },
+          "modelName": { "type": "string" },
+          "promptName": { "type": "string" },
+          "humanReview": { "$ref": "#/components/schemas/EvalHumanReview" },
+          "reviewerVerdicts": { "type": "array", "items": { "$ref": "#/components/schemas/EvalReviewerVerdict" } },
+          "goldLabel": { "$ref": "#/components/schemas/EvalGoldLabel" },
+          "hasDisagreement": { "type": "boolean" },
+          "aiGoldAgree": { "type": "boolean" }
+        }
+      },
+      "EvalHumanReview": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "taskId": { "type": "integer", "format": "int64" },
+          "modelConfigId": { "type": "integer", "format": "int64" },
+          "promptId": { "type": "integer", "format": "int64" },
+          "datasetItemId": { "type": "integer", "format": "int64" },
+          "isBadcaseHuman": { "type": "integer" },
+          "comment": { "type": "string" },
+          "reviewer": { "type": "string" },
+          "role": { "type": "string" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "EvalReviewerVerdict": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "taskId": { "type": "integer", "format": "int64" },
+          "modelConfigId": { "type": "integer", "format": "int64" },
+          "datasetItemId": { "type": "integer", "format": "int64" },
+          "promptId": { "type": "integer", "format": "int64" },
+          "isBadcase": { "type": "integer" },
+          "reviewer": { "type": "string" },
+          "role": { "type": "string" },
+          "comment": { "type": "string" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "EvalGoldLabel": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "taskId": { "type": "integer", "format": "int64" },
+          "datasetItemId": { "type": "integer", "format": "int64" },
+          "modelConfigId": { "type": "integer", "format": "int64" },
+          "promptId": { "type": "integer", "format": "int64" },
+          "isBadcase": { "type": "integer", "description": "1-badcase 0-goodcase" },
+          "adjudicator": { "type": "string" },
+          "comment": { "type": "string" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "ModelCompareVO": {
+        "type": "object",
+        "properties": {
+          "datasetItemId": { "type": "integer", "format": "int64" },
+          "question": { "type": "string" },
+          "referenceAnswer": { "type": "string" },
+          "context": { "type": "string" },
+          "answers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "modelConfigId": { "type": "integer", "format": "int64" },
+                "modelName": { "type": "string" },
+                "response": { "type": "string" },
+                "latencyMs": { "type": "integer" },
+                "isBadcase": { "type": "integer" },
+                "judgeReason": { "type": "string" }
+              }
+            }
+          }
+        }
+      },
+      "HumanReviewDTO": {
+        "type": "object",
+        "required": ["taskId", "modelConfigId", "promptId", "datasetItemId"],
+        "properties": {
+          "taskId": { "type": "integer", "format": "int64" },
+          "modelConfigId": { "type": "integer", "format": "int64" },
+          "promptId": { "type": "integer", "format": "int64" },
+          "datasetItemId": { "type": "integer", "format": "int64" },
+          "isBadcaseHuman": { "type": "integer", "description": "1-badcase 0-goodcase" },
+          "comment": { "type": "string" },
+          "reviewer": { "type": "string", "description": "校验人姓名" },
+          "role": { "type": "string", "description": "角色: normal / expert" }
+        }
+      },
+      "AdjudicationDTO": {
+        "type": "object",
+        "required": ["taskId", "modelConfigId", "promptId", "datasetItemId"],
+        "properties": {
+          "taskId": { "type": "integer", "format": "int64" },
+          "modelConfigId": { "type": "integer", "format": "int64" },
+          "promptId": { "type": "integer", "format": "int64" },
+          "datasetItemId": { "type": "integer", "format": "int64" },
+          "isBadcase": { "type": "integer", "description": "终审判定: 1-badcase 0-goodcase" },
+          "adjudicator": { "type": "string", "description": "裁决人" },
+          "comment": { "type": "string" }
+        }
+      },
+      "HumanReviewStatsVO": {
+        "type": "object",
+        "properties": {
+          "reviewedCount": { "type": "integer" },
+          "reviewedSampleCount": { "type": "integer" },
+          "agreeWithAiCount": { "type": "integer" },
+          "humanAiAgreementRate": { "type": "number" },
+          "aiBadcaseCount": { "type": "integer" },
+          "multiReviewerSampleCount": { "type": "integer" },
+          "allAgreeSampleCount": { "type": "integer" },
+          "humanHumanAgreementRate": { "type": "number" },
+          "totalCount": { "type": "integer" },
+          "reviewerCount": { "type": "integer" },
+          "fleissKappa": { "type": "number" },
+          "cohenKappaAvg": { "type": "number" },
+          "cohenKappaPairCount": { "type": "integer" },
+          "kappaLevel": { "type": "string", "description": "Kappa 档位描述" }
+        }
+      },
+      "HumanVsAiStatsVO": {
+        "type": "object",
+        "properties": {
+          "goldCount": { "type": "integer" },
+          "agreeCount": { "type": "integer" },
+          "disagreeCount": { "type": "integer" },
+          "disagreementRate": { "type": "number" },
+          "agreementRate": { "type": "number" },
+          "aiFalsePositive": { "type": "integer", "description": "AI 过严（假阳性）" },
+          "aiFalseNegative": { "type": "integer", "description": "AI 漏判（假阴性）" }
+        }
+      },
+      "GoldAnnotateDTO": {
+        "type": "object",
+        "required": ["datasetItemId", "annotator", "isBadcase"],
+        "properties": {
+          "datasetItemId": { "type": "integer", "format": "int64" },
+          "annotator": { "type": "string", "description": "标注者姓名" },
+          "role": { "type": "string", "description": "角色: ANNOTATOR / EXPERT" },
+          "isBadcase": { "type": "integer", "description": "1-badcase 0-goodcase" },
+          "comment": { "type": "string" }
+        }
+      },
+      "EvalGoldAnnotation": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "datasetId": { "type": "integer", "format": "int64" },
+          "datasetItemId": { "type": "integer", "format": "int64" },
+          "annotator": { "type": "string" },
+          "role": { "type": "string" },
+          "isBadcase": { "type": "integer" },
+          "comment": { "type": "string" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "GoldAnnotationItemVO": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "seqNo": { "type": "integer" },
+          "question": { "type": "string" },
+          "referenceAnswer": { "type": "string" },
+          "context": { "type": "string" },
+          "category": { "type": "string" },
+          "goodCount": { "type": "integer" },
+          "badCount": { "type": "integer" },
+          "annotationCount": { "type": "integer" },
+          "verdict": { "type": "integer", "description": "1-badcase 0-goodcase null-无有效票或平票" },
+          "hasDisagreement": { "type": "boolean" },
+          "extraFields": { "type": "string" },
+          "annotations": { "type": "array", "items": { "$ref": "#/components/schemas/GoldAnnotationEntryVO" } }
+        }
+      },
+      "GoldAnnotationEntryVO": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "annotator": { "type": "string" },
+          "role": { "type": "string" },
+          "isBadcase": { "type": "integer" },
+          "comment": { "type": "string" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "GoldAnnotationStatsVO": {
+        "type": "object",
+        "properties": {
+          "totalItems": { "type": "integer", "format": "int64" },
+          "annotatedItems": { "type": "integer", "format": "int64" },
+          "annotationCount": { "type": "integer", "format": "int64" },
+          "coverageRate": { "type": "number", "description": "标注覆盖率 0-1" },
+          "multiAnnotatedItems": { "type": "integer", "format": "int64" },
+          "agreedItems": { "type": "integer", "format": "int64" },
+          "agreementRate": { "type": "number", "description": "一致率 0-1" },
+          "fleissKappa": { "type": "number" },
+          "annotatorStats": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "annotator": { "type": "string" },
+                "role": { "type": "string" },
+                "goodCount": { "type": "integer" },
+                "badCount": { "type": "integer" },
+                "totalCount": { "type": "integer" }
+              }
+            }
+          }
+        }
+      },
+      "AsyncJobVO": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "jobType": { "type": "string", "description": "PARSE_DIMENSIONS / POLISH / DETECT_DUPLICATES" },
+          "status": { "type": "string", "enum": ["PENDING", "RUNNING", "COMPLETED", "FAILED"] },
+          "progress": { "type": "integer", "description": "0-100" },
+          "progressText": { "type": "string" },
+          "errorMessage": { "type": "string" },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "startedAt": { "type": "string", "format": "date-time" },
+          "finishedAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "EvalArticle": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "title": { "type": "string" },
+          "sourceName": { "type": "string" },
+          "sourceUrl": { "type": "string" },
+          "author": { "type": "string" },
+          "tags": { "type": "string", "description": "逗号分隔" },
+          "summary": { "type": "string", "description": "AI 生成摘要" },
+          "content": { "type": "string" },
+          "publishedAt": { "type": "string", "format": "date-time" },
+          "fetchedAt": { "type": "string", "format": "date-time" },
+          "status": { "type": "integer", "description": "1-正常 0-隐藏" }
+        }
+      },
+      "EvalRssSource": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "sourceName": { "type": "string" },
+          "feedUrl": { "type": "string" },
+          "sourceType": { "type": "string", "description": "rss-标准 feed / tencent-腾讯云" },
+          "description": { "type": "string" },
+          "status": { "type": "integer", "description": "1-启用 0-停用" },
+          "lastFetchedAt": { "type": "string", "format": "date-time" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "PlaygroundRequest": {
+        "type": "object",
+        "properties": {
+          "promptTemplate": { "type": "string", "description": "Prompt 模板（含 {xxx} 占位符）" },
+          "modelConfigId": { "type": "integer", "format": "int64" },
+          "fields": { "type": "object", "additionalProperties": { "type": "string" }, "description": "字段值 Map" }
+        }
+      }
+    }
+  }
+}
