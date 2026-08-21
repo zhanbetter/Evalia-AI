@@ -143,15 +143,26 @@ public class EvalResultServiceImpl implements EvalResultService {
         boolean needKeywordFilter = StrUtil.isNotBlank(keyword);
 
         if (needKeywordFilter) {
-            // 有关键词：拉取该任务的全部 badcase（含 reason/dimensions DB层粗过滤，question/response需关联后过滤）
-            // 先粗过滤 reason/dimensions，减少数据量
+            // 有关键词：DB层粗过滤 reason/dimensions/question，减少数据量
+            // question 通过子查询关联 eval_dataset_item 过滤
+            Set<Long> matchingItemIds = datasetItemMapper.selectList(
+                    new LambdaQueryWrapper<EvalDatasetItem>()
+                            .eq(EvalDatasetItem::getDatasetId, getDatasetId(taskId))
+                            .and(w -> w
+                                    .like(EvalDatasetItem::getQuestion, keyword)
+                                    .or().like(EvalDatasetItem::getReferenceAnswer, keyword)))
+                    .stream().map(EvalDatasetItem::getId).collect(Collectors.toSet());
             wrapper.and(w -> w
                     .like(EvalJudgeResult::getReason, keyword)
-                    .or().like(EvalJudgeResult::getDimensions, keyword));
+                    .or().like(EvalJudgeResult::getDimensions, keyword)
+                    .or().in(!matchingItemIds.isEmpty(), EvalJudgeResult::getDatasetItemId, matchingItemIds)
+                    .or().and(matchingItemIds.isEmpty(), q -> q.apply("1 = 0"))); // 无匹配时返回空
         }
         wrapper.orderByAsc(EvalJudgeResult::getId);
 
-        Page<EvalJudgeResult> pageObj = new Page<>(needKeywordFilter ? 1 : page, needKeywordFilter ? Integer.MAX_VALUE : size);
+        // 关键词搜索时用较大但有界的 page size，避免 OOM
+        int fetchSize = needKeywordFilter ? Math.min(50000, Math.max(page * size * 10, 1000)) : size;
+        Page<EvalJudgeResult> pageObj = new Page<>(needKeywordFilter ? 1 : page, fetchSize);
         Page<EvalJudgeResult> result = judgeResultMapper.selectPage(pageObj, wrapper);
 
         List<EvalJudgeResult> records = result.getRecords();
@@ -161,7 +172,7 @@ public class EvalResultServiceImpl implements EvalResultService {
 
         List<BadcaseVO> voList = enrichBadcaseVO(records, taskId);
 
-        // 关键词搜索：DB层只粗过滤了 reason/dimensions，这里再对 question/modelResponse 做二次过滤
+        // 关键词搜索：DB层已过滤 reason/dimensions/question，这里再对 modelResponse 做二次过滤
         if (needKeywordFilter) {
             String kw = keyword.trim().toLowerCase();
             voList = voList.stream().filter(vo ->
@@ -192,6 +203,29 @@ public class EvalResultServiceImpl implements EvalResultService {
 
         if (records.isEmpty()) return List.of();
         return enrichBadcaseVO(records, taskId);
+    }
+
+    @Override
+    public List<BadcaseVO> listDimensionResults(Long taskId, Long modelConfigId) {
+        List<EvalJudgeResult> records = judgeResultMapper.selectList(
+                new LambdaQueryWrapper<EvalJudgeResult>()
+                        .eq(EvalJudgeResult::getTaskId, taskId)
+                        .isNotNull(EvalJudgeResult::getDimension)
+                        .eq(EvalJudgeResult::getJudgeStatus, "JUDGED")
+                        .eq(modelConfigId != null, EvalJudgeResult::getModelConfigId, modelConfigId)
+                        .orderByAsc(EvalJudgeResult::getModelConfigId)
+                        .orderByAsc(EvalJudgeResult::getDatasetItemId)
+                        .orderByAsc(EvalJudgeResult::getDimension));
+        if (records.isEmpty()) return List.of();
+        return enrichBadcaseVO(records, taskId);
+    }
+
+    /**
+     * 根据任务ID获取关联的数据集ID
+     */
+    private Long getDatasetId(Long taskId) {
+        EvalTask task = taskMapper.selectById(taskId);
+        return task != null ? task.getDatasetId() : null;
     }
 
     /**
@@ -242,6 +276,7 @@ public class EvalResultServiceImpl implements EvalResultService {
             if (item != null) {
                 vo.setQuestion(item.getQuestion());
                 vo.setReferenceAnswer(item.getReferenceAnswer());
+                vo.setContext(item.getContext());
                 vo.setExtraFields(item.getExtraFields());
             }
 
@@ -736,7 +771,8 @@ public class EvalResultServiceImpl implements EvalResultService {
     @Override
     public List<BadcaseVO> listReviewSamples(Long taskId, Long promptId, Long modelConfigId,
                                               String reviewer, String role, int page, int size) {
-        // 查该任务的所有整体判定记录
+        // 查该任务的整体判定记录（分页）
+        int offset = (page - 1) * size;
         LambdaQueryWrapper<EvalJudgeResult> wrapper = new LambdaQueryWrapper<EvalJudgeResult>()
                 .eq(EvalJudgeResult::getTaskId, taskId)
                 .eq(promptId != null, EvalJudgeResult::getPromptId, promptId)
@@ -744,7 +780,7 @@ public class EvalResultServiceImpl implements EvalResultService {
                 .isNull(EvalJudgeResult::getDimension)
                 .eq(EvalJudgeResult::getJudgeStatus, com.eval.common.constant.JudgeStatus.JUDGED)
                 .orderByAsc(EvalJudgeResult::getId)
-                .last("LIMIT " + page * size);
+                .last("LIMIT " + size + " OFFSET " + offset);
         List<EvalJudgeResult> records = judgeResultMapper.selectList(wrapper);
         if (records.isEmpty()) return List.of();
 
@@ -796,7 +832,8 @@ public class EvalResultServiceImpl implements EvalResultService {
 
     @Override
     public List<BadcaseVO> listAdjudicationSamples(Long taskId, Long promptId, Long modelConfigId, int page, int size) {
-        // 查该任务所有整体判定记录
+        // 查该任务整体判定记录（分页）
+        int offset = (page - 1) * size;
         LambdaQueryWrapper<EvalJudgeResult> wrapper = new LambdaQueryWrapper<EvalJudgeResult>()
                 .eq(EvalJudgeResult::getTaskId, taskId)
                 .eq(promptId != null, EvalJudgeResult::getPromptId, promptId)
@@ -804,7 +841,7 @@ public class EvalResultServiceImpl implements EvalResultService {
                 .isNull(EvalJudgeResult::getDimension)
                 .eq(EvalJudgeResult::getJudgeStatus, com.eval.common.constant.JudgeStatus.JUDGED)
                 .orderByAsc(EvalJudgeResult::getId)
-                .last("LIMIT " + page * size);
+                .last("LIMIT " + size + " OFFSET " + offset);
         List<EvalJudgeResult> records = judgeResultMapper.selectList(wrapper);
         if (records.isEmpty()) return List.of();
 
@@ -1020,6 +1057,7 @@ public class EvalResultServiceImpl implements EvalResultService {
             if (item != null) {
                 vo.setQuestion(item.getQuestion());
                 vo.setReferenceAnswer(item.getReferenceAnswer());
+                vo.setContext(item.getContext());
                 vo.setExtraFields(item.getExtraFields());
             }
             vo.setModelName(modelNameMap.getOrDefault(j.getModelConfigId(), "模型" + j.getModelConfigId()));

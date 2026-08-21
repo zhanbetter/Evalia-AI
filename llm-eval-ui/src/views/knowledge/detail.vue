@@ -43,7 +43,7 @@
       </div>
 
       <!-- 正文 -->
-      <div v-if="article.content" class="article-content" v-html="article.content"></div>
+      <div v-if="article.content" class="article-content" v-html="sanitizeHtml(article.content)"></div>
       <div v-else class="article-content empty">
         <el-empty description="暂无正文内容" />
       </div>
@@ -68,7 +68,7 @@
 </template>
 
 <script>
-import axios from 'axios'
+import request from '../../api/request'
 import { ElMessage } from 'element-plus'
 
 export default {
@@ -95,11 +95,11 @@ export default {
     async loadArticle() {
       this.loading = true
       try {
-        const { data } = await axios.get(`/api/articles/${this.id}`)
-        if (data.code === 200) {
-          this.article = data.data
+        const res = await request.get(`/articles/${this.id}`)
+        if (res.code === 200) {
+          this.article = res.data
         } else {
-          ElMessage.error(data.message || '文章不存在')
+          ElMessage.error(res.message || '文章不存在')
           this.$router.push('/knowledge')
         }
       } catch (e) {
@@ -111,13 +111,51 @@ export default {
     },
     async loadModels() {
       try {
-        const { data } = await axios.get('/api/models', { params: { page: 1, size: 100 } })
-        if (data.code === 200) {
-          this.models = data.data.records || []
+        const res = await request.get('/models', { params: { page: 1, size: 100, status: 1 } })
+        if (res.code === 200) {
+          this.models = res.data.records || []
         }
       } catch (e) { /* 忽略 */ }
     },
-    doSummarize() {
+    sanitizeHtml(html) {
+      if (!html) return ''
+      // 允许的安全标签和属性
+      const allowedTags = new Set(['p','br','h1','h2','h3','h4','h5','h6','ul','ol','li','strong','em','a','code','pre','blockquote','table','thead','tbody','tr','td','th','img','span','div','hr','figure','figcaption','dl','dt','dd','sub','sup','small','mark','del','ins'])
+      const allowedAttributes = { 'a': ['href','title','target'], 'img': ['src','alt','width','height'], 'span': ['style'], 'div': ['style'] }
+      const doc = new DOMParser().parseFromString(html, 'text/html')
+      const sanitizeNode = (node) => {
+        const children = Array.from(node.childNodes)
+        for (const child of children) {
+          if (child.nodeType === 1) {
+            const tag = child.tagName.toLowerCase()
+            if (!allowedTags.has(tag)) {
+              child.replaceWith(...child.childNodes)
+              continue
+            }
+            // 清理属性
+            const allowed = allowedAttributes[tag] || []
+            const attrs = Array.from(child.attributes)
+            for (const attr of attrs) {
+              if (!allowed.includes(attr.name.toLowerCase())) {
+                child.removeAttribute(attr.name)
+              }
+            }
+            // 禁止 javascript: URL
+            if (child.hasAttribute('href')) {
+              const href = child.getAttribute('href')
+              if (/^\s*javascript:/i.test(href)) {
+                child.removeAttribute('href')
+              }
+            }
+            sanitizeNode(child)
+          }
+        }
+      }
+      sanitizeNode(doc.body)
+      return doc.body.innerHTML
+    },
+    async doSummarize() {
+      await this.loadModels()
       this.showModelDialog = true
     },
     async confirmSummarize() {
@@ -125,13 +163,13 @@ export default {
       try {
         const params = {}
         if (this.selectedModelId) params.modelConfigId = this.selectedModelId
-        const { data } = await axios.post(`/api/articles/${this.id}/summary`, null, { params })
-        if (data.code === 200) {
-          this.article.summary = data.data
+        const res = await request.post(`/articles/${this.id}/summary`, null, { params })
+        if (res.code === 200) {
+          this.article.summary = res.data
           ElMessage.success('摘要生成成功')
           this.showModelDialog = false
         } else {
-          ElMessage.error(data.message || '生成摘要失败')
+          ElMessage.error(res.message || '生成摘要失败')
         }
       } catch (e) {
         ElMessage.error('生成摘要失败：' + (e.response?.data?.message || e.message))
@@ -145,12 +183,12 @@ export default {
     async doRepair() {
       this.repairing = true
       try {
-        const { data } = await axios.post(`/api/articles/${this.id}/repair`)
-        if (data.code === 200) {
-          this.article.content = data.data || this.article.content
+        const res = await request.post(`/articles/${this.id}/repair`)
+        if (res.code === 200) {
+          this.article.content = res.data || this.article.content
           ElMessage.success('正文已清理并写回数据库')
         } else {
-          ElMessage.error(data.message || '清理失败')
+          ElMessage.error(res.message || '清理失败')
         }
       } catch (e) {
         ElMessage.error('清理失败：' + (e.response?.data?.message || e.message))

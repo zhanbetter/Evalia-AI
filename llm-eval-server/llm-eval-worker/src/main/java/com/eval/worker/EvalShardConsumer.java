@@ -25,6 +25,7 @@ import org.springframework.stereotype.Component;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 /**
  * 分片评测 Consumer
@@ -58,6 +59,8 @@ public class EvalShardConsumer {
     private static final String LOCK_SUFFIX = ":lock";
     private static final long LOCK_TTL_MINUTES = 15;
     private static final int MAX_RETRIES = 3;
+    /** 分片级最大重试次数（分片内单条 case 已有 MAX_RETRIES 次重试，分片级再给一次机会） */
+    private static final int MAX_SHARD_RETRIES = 2;
     private static final int SHARD_SIZE = 500;
 
     @KafkaListener(topics = KafkaTopic.EVAL_SHARD_EXECUTE, groupId = "eval-shard-group")
@@ -113,6 +116,20 @@ public class EvalShardConsumer {
             log.info("分片已完成（幂等跳过）: taskId={}, shard={}", taskId, shardIndex);
             return;
         }
+
+        // 分片级重试：删除上一次失败的 ERROR 结果，让断点续评不跳过这些 case
+        if (ShardStatus.FAILED.equals(shard.getStatus())) {
+            Set<Long> failedItemIds = msg.getCases().stream()
+                    .map(CaseItem::getDatasetItemId).collect(Collectors.toSet());
+            if (!failedItemIds.isEmpty()) {
+                resultMapper.delete(new LambdaQueryWrapper<EvalResult>()
+                        .eq(EvalResult::getTaskId, taskId)
+                        .likeRight(EvalResult::getResponse, "ERROR:")
+                        .in(EvalResult::getDatasetItemId, failedItemIds));
+                log.info("分片重试：已清理上次失败结果: taskId={}, shard={}", taskId, shardIndex);
+            }
+        }
+
         shard.setStatus(ShardStatus.RUNNING);
         shard.setCompletedCount(0);
         shard.setFailedCount(0);
@@ -296,9 +313,18 @@ public class EvalShardConsumer {
 
     /**
      * 检查是否所有分片已完成，如果是则触发 Judge 阶段
+     * 使用 Redis 分布式锁防止并发分片同时触发 Judge
      */
     private void checkAndTriggerJudge(EvalTask task) {
         Long taskId = task.getId();
+
+        // 分布式锁：同一任务只允许一个分片触发 Judge 检查
+        String lockKey = "eval:task:" + taskId + ":judge-trigger-lock";
+        Boolean acquired = redisTemplate.opsForValue().setIfAbsent(lockKey, "1", 30, TimeUnit.SECONDS);
+        if (!acquired) {
+            log.info("Judge 触发锁已被占用，跳过: taskId={}", taskId);
+            return;
+        }
 
         // 统计分片完成数（COMPLETED 或 FAILED 都算终态）
         long terminalCount = shardMapper.selectCount(
@@ -315,17 +341,53 @@ public class EvalShardConsumer {
 
         if (terminalCount < totalShards) {
             log.info("分片未全部完成: taskId={}, {}/{}", taskId, terminalCount, totalShards);
+            redisTemplate.delete(lockKey);
             return;
         }
 
-        // 统计失败分片数
-        long failedShards = shardMapper.selectCount(
+        // 所有分片终态 → 检查是否有可重试的 FAILED 分片
+        List<EvalTaskShard> failedShards = shardMapper.selectList(
                 new LambdaQueryWrapper<EvalTaskShard>()
                         .eq(EvalTaskShard::getTaskId, taskId)
                         .eq(EvalTaskShard::getStatus, ShardStatus.FAILED));
+        boolean hasRetriable = false;
+        for (EvalTaskShard fs : failedShards) {
+            if (fs.getRetryCount() == null || fs.getRetryCount() < 2) {
+                hasRetriable = true;
+                break;
+            }
+        }
+        if (hasRetriable) {
+            // 有可重试分片 → 重新发送到 Kafka，不触发 Judge
+            for (EvalTaskShard fs : failedShards) {
+                if (fs.getRetryCount() != null && fs.getRetryCount() >= 2) continue;
+                try {
+                    List<CaseItem> cases = cn.hutool.json.JSONUtil.toList(fs.getShardData(), CaseItem.class);
+                    ShardMessage retryMsg = new ShardMessage();
+                    retryMsg.setTaskId(taskId);
+                    retryMsg.setShardIndex(fs.getShardIndex());
+                    retryMsg.setTotalCount(fs.getShardSize());
+                    retryMsg.setCases(cases);
+                    kafkaTemplate.send(KafkaTopic.EVAL_SHARD_EXECUTE, String.valueOf(taskId),
+                            cn.hutool.json.JSONUtil.toJsonStr(retryMsg));
+                    log.info("分片已重新调度: taskId={}, shard={}", taskId, fs.getShardIndex());
+                } catch (Exception e) {
+                    log.error("分片重新调度失败: taskId={}, shard={}", taskId, fs.getShardIndex(), e);
+                }
+            }
+            redisTemplate.delete(lockKey);
+            return;
+        }
+
+        // 统计失败分片数（已达重试上限的）
+        long terminalFailedCount = shardMapper.selectCount(
+                new LambdaQueryWrapper<EvalTaskShard>()
+                        .eq(EvalTaskShard::getTaskId, taskId)
+                        .eq(EvalTaskShard::getStatus, ShardStatus.FAILED)
+                        .ge(EvalTaskShard::getRetryCount, 2));
 
         // 所有分片终态 → 更新任务状态
-        if (failedShards == totalShards) {
+        if (terminalFailedCount == totalShards) {
             // 全部分片失败 → 任务失败
             task.setStatus(TaskStatus.FAILED);
         } else {
@@ -339,8 +401,11 @@ public class EvalShardConsumer {
         // 触发 Judge 阶段
         triggerJudge(task);
 
+        // 释放锁
+        redisTemplate.delete(lockKey);
+
         log.info("所有分片完成，Judge 已触发: taskId={}, total={}, completed={}, failed={}",
-                taskId, totalShards, totalShards - failedShards, failedShards);
+                taskId, totalShards, totalShards - terminalFailedCount, terminalFailedCount);
     }
 
     /**
@@ -381,10 +446,20 @@ public class EvalShardConsumer {
     }
 
     private void markShardDone(EvalTaskShard shard, int completedCount, int failedCount) {
-        shard.setStatus(ShardStatus.COMPLETED);
         shard.setCompletedCount(completedCount);
         shard.setFailedCount(failedCount);
         shard.setFinishedAt(LocalDateTime.now());
+        if (failedCount > 0 && (shard.getRetryCount() == null || shard.getRetryCount() < MAX_SHARD_RETRIES)) {
+            // 有失败且重试次数未达上限 → 标记 FAILED，等待分片级重试
+            shard.setStatus(ShardStatus.FAILED);
+            shard.setRetryCount((shard.getRetryCount() != null ? shard.getRetryCount() : 0) + 1);
+            log.warn("分片有失败 case，将重试: taskId={}, shard={}, failed={}, retry={}/{}",
+                    shard.getTaskId(), shard.getShardIndex(), failedCount,
+                    shard.getRetryCount(), MAX_SHARD_RETRIES);
+        } else {
+            // 全部成功，或已达重试上限 → 标记 COMPLETED（终态）
+            shard.setStatus(ShardStatus.COMPLETED);
+        }
         shardMapper.updateById(shard);
     }
 

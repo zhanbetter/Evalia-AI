@@ -68,6 +68,13 @@ public class EvalResultController {
         return Result.success(evalResultService.listJudgeResults(taskId, promptId, modelConfigId));
     }
 
+    @GetMapping("/{taskId}/dimension-results")
+    public Result<List<BadcaseVO>> listDimensionResults(
+            @PathVariable Long taskId,
+            @RequestParam(required = false) Long modelConfigId) {
+        return Result.success(evalResultService.listDimensionResults(taskId, modelConfigId));
+    }
+
     // ===== 人工校验 =====
 
     @PostMapping("/human-review")

@@ -3,11 +3,15 @@ package com.eval.service.impl;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.eval.common.auth.AuthContext;
 import com.eval.common.exception.BusinessException;
 import com.eval.common.result.PageResult;
+import com.eval.common.util.OwnershipUtil;
 import com.eval.dao.mapper.*;
 import com.eval.model.dto.DatasetItemDTO;
+import com.eval.model.dto.NameCheckResult;
 import com.eval.model.dto.SchemaFieldDTO;
 import com.eval.model.entity.*;
 import com.eval.model.vo.DatasetEvalHistoryVO;
@@ -56,6 +60,10 @@ public class DatasetServiceImpl implements DatasetService {
         ROLE_HINTS.put("category", "CATEGORY"); ROLE_HINTS.put("分类", "CATEGORY");
         ROLE_HINTS.put("话题", "CATEGORY"); ROLE_HINTS.put("topic", "CATEGORY");
         ROLE_HINTS.put("type", "CATEGORY"); ROLE_HINTS.put("类型", "CATEGORY");
+        ROLE_HINTS.put("model_response", "MODEL_RESPONSE"); ROLE_HINTS.put("模型回答", "MODEL_RESPONSE");
+        ROLE_HINTS.put("模型回复", "MODEL_RESPONSE"); ROLE_HINTS.put("回答", "MODEL_RESPONSE");
+        ROLE_HINTS.put("response", "MODEL_RESPONSE"); ROLE_HINTS.put("answer", "MODEL_RESPONSE");
+        ROLE_HINTS.put("output", "MODEL_RESPONSE"); ROLE_HINTS.put("输出", "MODEL_RESPONSE");
     }
 
     @Override
@@ -162,7 +170,7 @@ public class DatasetServiceImpl implements DatasetService {
     @Transactional
     public EvalDataset upload(MultipartFile file, String name, String description, Integer hasReference,
                              Integer hasModelResponse,
-                             List<SchemaFieldDTO> schemaFields, String columnMapping) {
+                             List<SchemaFieldDTO> schemaFields, String columnMapping, Long parentId, Long createdBy) {
         String originalFilename = file.getOriginalFilename();
         String fileType = detectFileType(originalFilename);
 
@@ -172,15 +180,44 @@ public class DatasetServiceImpl implements DatasetService {
         // 解析文件内容
         List<EvalDatasetItem> items = parseFile(file, fileType, schemaFields);
 
+        // 名称/版本策略：
+        //  - 新建（parentId==null）：名称全局唯一，同名（任意版本）一律拒绝
+        //  - 提交新版本（parentId!=null）：允许同名，版本号 = 该名称最新版本+1，同名+同版本视为完全重复拒绝
+        final String datasetName;
+        int nextVersion;
+        if (parentId != null) {
+            EvalDataset parent = datasetMapper.selectById(parentId);
+            if (parent == null) throw new BusinessException("父数据集不存在，无法提交新版本");
+            datasetName = parent.getName();
+            List<EvalDataset> sameNameList = datasetMapper.selectList(
+                    new LambdaQueryWrapper<EvalDataset>().eq(EvalDataset::getName, datasetName));
+            int latestVersion = sameNameList.stream()
+                    .map(EvalDataset::getVersion)
+                    .filter(Objects::nonNull)
+                    .max(Integer::compareTo)
+                    .orElse(0);
+            nextVersion = latestVersion + 1;
+            boolean versionTaken = sameNameList.stream()
+                    .anyMatch(d -> Objects.equals(d.getVersion(), nextVersion));
+            if (versionTaken) {
+                throw new BusinessException("数据集「" + datasetName + "」v" + nextVersion + " 已存在，无法提交新版本。请先删除冲突版本后重试");
+            }
+        } else {
+            String trimName = name != null ? name.trim() : "";
+            if (trimName.isEmpty()) throw new BusinessException("数据集名称不能为空");
+            Long existsCount = datasetMapper.selectCount(
+                    new LambdaQueryWrapper<EvalDataset>().eq(EvalDataset::getName, trimName));
+            if (existsCount != null && existsCount > 0) {
+                throw new BusinessException("已存在同名数据集「" + trimName + "」，请更换名称");
+            }
+            datasetName = trimName;
+            nextVersion = 1;
+        }
+
         // 创建数据集记录
         EvalDataset dataset = new EvalDataset();
-        dataset.setName(name);
-        EvalDataset latest = datasetMapper.selectOne(
-                new LambdaQueryWrapper<EvalDataset>()
-                        .eq(EvalDataset::getName, name)
-                        .orderByDesc(EvalDataset::getVersion)
-                        .last("LIMIT 1"));
-        dataset.setVersion(latest != null ? latest.getVersion() + 1 : 1);
+        dataset.setName(datasetName);
+        dataset.setVersion(nextVersion);
         dataset.setDescription(description != null ? description : "");
         dataset.setFilePath(filePath);
         dataset.setFileType(fileType);
@@ -188,11 +225,13 @@ public class DatasetServiceImpl implements DatasetService {
         dataset.setHasReference(hasReference != null ? hasReference : 1);
         dataset.setHasModelResponse(hasModelResponse != null ? hasModelResponse : 0);
         dataset.setTotalCount(items.size());
+        dataset.setCreatedBy(createdBy);
         dataset.setCreatedAt(LocalDateTime.now());
         datasetMapper.insert(dataset);
 
         // 保存Schema
-        if (schemaFields != null) {
+        if (schemaFields != null && !schemaFields.isEmpty()) {
+            log.info("保存Schema: datasetId={}, 字段数={}", dataset.getId(), schemaFields.size());
             for (int i = 0; i < schemaFields.size(); i++) {
                 SchemaFieldDTO dto = schemaFields.get(i);
                 EvalDatasetSchema schema = new EvalDatasetSchema();
@@ -206,6 +245,8 @@ public class DatasetServiceImpl implements DatasetService {
                 schema.setSortOrder(dto.getSortOrder() != null ? dto.getSortOrder() : i);
                 schemaMapper.insert(schema);
             }
+        } else {
+            log.warn("上传时schemaFields为空，跳过Schema保存: datasetId={}", dataset.getId());
         }
 
         // 批量写入条目
@@ -216,7 +257,7 @@ public class DatasetServiceImpl implements DatasetService {
             datasetItemMapper.insert(item);
         }
 
-        log.info("数据集上传成功: id={}, name={}, count={}", dataset.getId(), name, items.size());
+        log.info("数据集上传成功: id={}, name={}, version={}, count={}", dataset.getId(), datasetName, nextVersion, items.size());
         return dataset;
     }
 
@@ -238,7 +279,21 @@ public class DatasetServiceImpl implements DatasetService {
     public EvalDataset updateInfo(Long id, String name, String description, Integer hasReference, Integer hasModelResponse) {
         EvalDataset dataset = datasetMapper.selectById(id);
         if (dataset == null) throw new BusinessException("数据集不存在");
-        if (StrUtil.isNotBlank(name)) dataset.setName(name);
+        if (StrUtil.isNotBlank(name)) {
+            String trimName = name.trim();
+            if (!trimName.equals(dataset.getName())) {
+                // 改名冲突：新名称不能被其它名称组使用（同一名称的其它版本算同一个实体，改名应整组统一）
+                NameCheckResult check = checkName(trimName, null, dataset.getName(), null);
+                if (check.isExists()) {
+                    throw new BusinessException("已存在同名数据集「" + trimName + "」，请更换名称");
+                }
+                // 整组统一改名：保持同名称下所有版本属于同一实体
+                datasetMapper.update(null, new LambdaUpdateWrapper<EvalDataset>()
+                        .eq(EvalDataset::getName, dataset.getName())
+                        .set(EvalDataset::getName, trimName));
+            }
+            dataset.setName(trimName);
+        }
         dataset.setDescription(description != null ? description : "");
         if (hasReference != null) dataset.setHasReference(hasReference);
         if (hasModelResponse != null) dataset.setHasModelResponse(hasModelResponse);
@@ -249,7 +304,10 @@ public class DatasetServiceImpl implements DatasetService {
 
     @Override
     @Transactional
-    public void deleteById(Long id) {
+    public void deleteById(Long id, AuthContext ctx) {
+        EvalDataset ds = datasetMapper.selectById(id);
+        if (ds == null) throw new BusinessException("数据集不存在");
+        OwnershipUtil.assertCanDelete(ds.getCreatedBy(), ctx, "数据集");
         schemaMapper.delete(new LambdaQueryWrapper<EvalDatasetSchema>()
                 .eq(EvalDatasetSchema::getDatasetId, id));
         datasetItemMapper.delete(new LambdaQueryWrapper<EvalDatasetItem>()
@@ -339,11 +397,14 @@ public class DatasetServiceImpl implements DatasetService {
 
     @Override
     @Transactional
-    public void deleteItem(Long itemId) {
+    public void deleteItem(Long itemId, AuthContext ctx) {
         EvalDatasetItem item = datasetItemMapper.selectById(itemId);
         if (item == null) throw new BusinessException("条目不存在");
-        datasetItemMapper.deleteById(itemId);
         EvalDataset ds = datasetMapper.selectById(item.getDatasetId());
+        if (ds != null) {
+            OwnershipUtil.assertCanDelete(ds.getCreatedBy(), ctx, "数据集");
+        }
+        datasetItemMapper.deleteById(itemId);
         if (ds != null && ds.getTotalCount() > 0) {
             ds.setTotalCount(ds.getTotalCount() - 1);
             datasetMapper.updateById(ds);
@@ -352,12 +413,19 @@ public class DatasetServiceImpl implements DatasetService {
 
     @Override
     @Transactional
-    public void batchDeleteItems(Long datasetId, List<Long> itemIds) {
+    public void batchDeleteItems(Long datasetId, List<Long> itemIds, AuthContext ctx) {
         if (itemIds == null || itemIds.isEmpty()) return;
-        datasetItemMapper.deleteBatchIds(itemIds);
         EvalDataset ds = datasetMapper.selectById(datasetId);
-        if (ds != null) {
-            ds.setTotalCount(Math.max(0, ds.getTotalCount() - itemIds.size()));
+        if (ds == null) throw new BusinessException("数据集不存在");
+        OwnershipUtil.assertCanDelete(ds.getCreatedBy(), ctx, "数据集");
+        // 先统计实际存在的条目数，避免 totalCount 偏移
+        long existCount = datasetItemMapper.selectCount(
+                new LambdaQueryWrapper<EvalDatasetItem>()
+                        .eq(EvalDatasetItem::getDatasetId, datasetId)
+                        .in(EvalDatasetItem::getId, itemIds));
+        datasetItemMapper.deleteBatchIds(itemIds);
+        if (ds != null && existCount > 0) {
+            ds.setTotalCount(Math.max(0, ds.getTotalCount() - (int) existCount));
             datasetMapper.updateById(ds);
         }
     }
@@ -373,6 +441,38 @@ public class DatasetServiceImpl implements DatasetService {
         return datasetMapper.selectList(new LambdaQueryWrapper<EvalDataset>()
                 .eq(EvalDataset::getName, name)
                 .orderByDesc(EvalDataset::getVersion));
+    }
+
+    @Override
+    public NameCheckResult checkName(String name, Long excludeDatasetId, String excludeName, Integer targetVersion) {
+        NameCheckResult result = new NameCheckResult();
+        if (StrUtil.isBlank(name)) {
+            return result;
+        }
+        String trimName = name.trim();
+        List<EvalDataset> sameNameList = datasetMapper.selectList(
+                new LambdaQueryWrapper<EvalDataset>()
+                        .eq(EvalDataset::getName, trimName)
+                        .ne(excludeDatasetId != null, EvalDataset::getId, excludeDatasetId)
+                        .ne(StrUtil.isNotBlank(excludeName), EvalDataset::getName, excludeName));
+        if (sameNameList.isEmpty()) {
+            result.setExists(false);
+            result.setNextVersion(1);
+            result.setTargetVersionTaken(false);
+            return result;
+        }
+        int latestVersion = sameNameList.stream()
+                .map(EvalDataset::getVersion)
+                .filter(Objects::nonNull)
+                .max(Integer::compareTo)
+                .orElse(0);
+        result.setExists(true);
+        result.setVersionCount(sameNameList.size());
+        result.setLatestVersion(latestVersion);
+        result.setNextVersion(latestVersion + 1);
+        result.setTargetVersionTaken(sameNameList.stream()
+                .anyMatch(d -> targetVersion != null && Objects.equals(d.getVersion(), targetVersion)));
+        return result;
     }
 
     @Override
@@ -532,6 +632,7 @@ public class DatasetServiceImpl implements DatasetService {
                 case "REFERENCE": item.setReferenceAnswer(val); break;
                 case "CONTEXT": item.setContext(val); break;
                 case "CATEGORY": item.setCategory(val); break;
+                case "MODEL_RESPONSE": if (!val.isEmpty()) extra.put("model_response", val); break;
                 default: if (!val.isEmpty()) extra.put(col, val); break;
             }
         }
@@ -555,6 +656,7 @@ public class DatasetServiceImpl implements DatasetService {
                 case "REFERENCE": item.setReferenceAnswer(val); break;
                 case "CONTEXT": item.setContext(val); break;
                 case "CATEGORY": item.setCategory(val); break;
+                case "MODEL_RESPONSE": if (!val.isEmpty()) extra.put("model_response", val); break;
                 default: if (!val.isEmpty()) extra.put(col, val); break;
             }
         }
@@ -578,6 +680,7 @@ public class DatasetServiceImpl implements DatasetService {
                 case "REFERENCE": item.setReferenceAnswer(val); break;
                 case "CONTEXT": item.setContext(val); break;
                 case "CATEGORY": item.setCategory(val); break;
+                case "MODEL_RESPONSE": if (!val.isEmpty()) extra.put("model_response", val); break;
                 default: if (!val.isEmpty()) extra.put(col, val); break;
             }
         }

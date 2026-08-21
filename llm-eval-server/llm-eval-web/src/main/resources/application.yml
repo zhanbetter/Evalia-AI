@@ -49,7 +49,22 @@ minio:
 eval:
   encrypt:
     secret-key: ${EVAL_ENCRYPT_KEY:}
+  security:
+    # 注册邀请码：非空时开放自助注册，注册必须提交一致邀请码；
+    # 置空则关闭注册（只能登录）。生产环境务必通过 EVAL_REGISTER_CODE 修改。
+    register-code: ${EVAL_REGISTER_CODE:evalia80}
+    # JWT 签名密钥（HS256，建议 ≥32 字符）。生产必须通过 EVAL_JWT_SECRET 覆盖。
+    jwt-secret: ${EVAL_JWT_SECRET:EVALIA_DEV_JWT_SECRET_CHANGE_ME_0123456789}
+    # JWT 有效期（小时）
+    jwt-expire-hours: ${EVAL_JWT_EXPIRE_HOURS:72}
 
-logging:
-  level:
-    com.eval: DEBUG
+springdoc:
+  api-docs:
+    enabled: true
+    path: /v3/api-docs
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui.html
+    tags-sorter: alpha
+    operations-sorter: alpha
+  packages-to-scan: com.eval.web.controller

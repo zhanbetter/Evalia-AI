@@ -252,11 +252,19 @@ public class PromptGenerator {
                 DimensionDef dim = config.getDimensions().get(i);
                 sb.append("    \"").append(dim.getName()).append("\": { ");
                 if ("score".equals(dim.getScoringType())) {
-                    sb.append("\"score\": 1-5, \"reason\": \"简要说明\"");
+                    // 根据 rubric 中定义的 level 生成可选值，而不是写死 1-5
+                    String scoreValues = "1/3/5";
+                    if (dim.getRubric() != null && !dim.getRubric().isEmpty()) {
+                        scoreValues = dim.getRubric().stream()
+                                .map(RubricItem::getLevel)
+                                .filter(l -> l != null && !l.isEmpty())
+                                .collect(Collectors.joining("/"));
+                    }
+                    sb.append("\"score\": ").append(scoreValues).append(", \"reason\": \"简要说明\"");
                 } else if ("enum".equals(dim.getScoringType())) {
                     sb.append("\"result\": \"").append(String.join("/", dim.getEnumValues())).append("\", \"reason\": \"简要说明\"");
                 } else if ("boolean".equals(dim.getScoringType())) {
-                    sb.append("\"result\": true/false（无法判断时填 null）, \"reason\": \"简要说明\"");
+                    sb.append("\"result\": \"good/bad/unknown\", \"reason\": \"简要说明\"");
                 } else {
                     // custom：用 rubric 的 level 作为可选等级
                     String levels = "";
@@ -274,17 +282,8 @@ public class PromptGenerator {
                 sb.append("\n");
             }
             sb.append("  },\n");
-            sb.append("  \"is_badcase\": true/false（无法判断时填 null）,\n");
+            sb.append("  \"overall\": \"good/bad/unknown\",\n");
             sb.append("  \"reason\": \"整体判定理由\"\n}\n```\n");
-        }
-
-        // enable_cot：注入思维链引导指令
-        if (Boolean.TRUE.equals(config.getEnableCot())) {
-            sb.append("\n【思维链引导】\n");
-            sb.append("在输出最终JSON之前，请先逐步分析：\n");
-            sb.append("1. 逐个分析各评分维度，给出每个维度的判断依据\n");
-            sb.append("2. 综合各维度分析，给出整体判定理由\n");
-            sb.append("3. 最后输出符合格式要求的JSON\n\n");
         }
 
         // strict_output：注入输出格式规范，要求模型严格遵循
@@ -377,15 +376,6 @@ public class PromptGenerator {
         sb.append("  \"reason\": \"简要说明\"\n}\n```\n");
         }
 
-        // enable_cot：注入思维链引导指令
-        if (Boolean.TRUE.equals(config.getEnableCot())) {
-            sb.append("\n【思维链引导】\n");
-            sb.append("在输出最终JSON之前，请先分析：\n");
-            sb.append("1. 根据评分标准，分析模型回答在该维度的表现\n");
-            sb.append("2. 给出判断依据\n");
-            sb.append("3. 最后输出符合格式要求的JSON\n\n");
-        }
-
         // strict_output：注入单维度输出格式规范
         if (Boolean.TRUE.equals(config.getStrictOutput())) {
             sb.append("\n").append(buildOutputSchemaBlock(config, dim));
@@ -411,7 +401,7 @@ public class PromptGenerator {
             sb.append("}\n");
         } else {
             sb.append("{\n");
-            sb.append("  \"is_badcase\": 布尔值 true/false 或 null（是否整体判定为 badcase；资料不足无法判断时填 null）,\n");
+            sb.append("  \"overall\": 字符串，只能是 \"good\" 或 \"bad\" 或 \"unknown\"（整体判定），\n");
             sb.append("  \"dimensions\": {\n");
             if (config.getDimensions() != null) {
                 for (int i = 0; i < config.getDimensions().size(); i++) {
@@ -439,21 +429,21 @@ public class PromptGenerator {
         String pad = "";
         for (int i = 0; i < indent; i++) pad += "  ";
         if ("score".equals(dim.getScoringType())) {
-            String range = "1-5 的整数";
+            String range = "1/3/5";
             if (dim.getRubric() != null && !dim.getRubric().isEmpty()) {
                 List<String> levels = dim.getRubric().stream()
                         .map(RubricItem::getLevel)
                         .filter(l -> l != null && !l.isEmpty())
                         .collect(Collectors.toList());
-                if (!levels.isEmpty()) range = "整数，只能取值为 " + String.join("、", levels);
+                if (!levels.isEmpty()) range = String.join("/", levels);
             }
-            sb.append(pad).append("\"score\": ").append(range).append(",\n");
+            sb.append(pad).append("\"score\": 整数，只能取值为 ").append(range).append(",\n");
         } else if ("enum".equals(dim.getScoringType())) {
             String allowed = dim.getEnumValues() != null && dim.getEnumValues().length > 0
                     ? String.join("/", dim.getEnumValues()) : "枚举值";
             sb.append(pad).append("\"result\": 字符串，只能是以下值之一: ").append(allowed).append(",\n");
         } else if ("boolean".equals(dim.getScoringType())) {
-            sb.append(pad).append("\"result\": 布尔值 true/false 或 null（无法判断时填 null）,\n");
+            sb.append(pad).append("\"result\": 字符串，只能是 \"good\" 或 \"bad\" 或 \"unknown\"（无法判断时填 unknown）,\n");
         } else {
             // custom：优先 enum_values，其次 rubric level
             String allowed = "";
@@ -585,8 +575,13 @@ public class PromptGenerator {
                 }
             }
 
-            // 整体 is_badcase：优先取 AI 返回的值（支持 null=unknown），没有则根据规则计算
-            if (jsonObj.containsKey("is_badcase")) {
+            // 整体判定：优先读 overall（新三态格式），兼容 is_badcase / badcase（旧格式）
+            if (jsonObj.containsKey("overall")) {
+                String ov = jsonObj.getStr("overall", "").trim().toLowerCase();
+                if ("bad".equals(ov)) result.setBadcase(true);
+                else if ("good".equals(ov)) result.setBadcase(false);
+                else result.setBadcase(null); // unknown
+            } else if (jsonObj.containsKey("is_badcase")) {
                 Object raw = jsonObj.get("is_badcase");
                 result.setBadcase(isUnknownValue(raw) ? null : parseBooleanValue(raw));
             } else if (jsonObj.containsKey("badcase")) {

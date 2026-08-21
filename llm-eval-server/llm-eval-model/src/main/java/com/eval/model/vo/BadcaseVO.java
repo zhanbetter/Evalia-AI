@@ -54,6 +54,9 @@ public class BadcaseVO {
     /** 参考答案（来自 eval_dataset_item） */
     private String referenceAnswer;
 
+    /** 上下文/人设（来自 eval_dataset_item） */
+    private String context;
+
     /** 被测模型回答（来自 eval_result） */
     private String modelResponse;
 

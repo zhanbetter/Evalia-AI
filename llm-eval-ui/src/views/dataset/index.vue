@@ -65,7 +65,11 @@
     <el-dialog v-model="showEditDialog" title="编辑数据集" width="480px">
       <el-form :model="editForm" label-width="80px">
         <el-form-item label="名称" required>
-          <el-input v-model="editForm.name" placeholder="请输入数据集名称" />
+          <el-input v-model="editForm.name" placeholder="请输入数据集名称" @input="onEditNameInput" @blur="checkEditName" />
+          <div v-if="editNameWarning" class="name-warn warn-error">
+            <el-icon><WarningFilled /></el-icon>
+            <span>{{ editNameWarning }}</span>
+          </div>
         </el-form-item>
         <el-form-item label="评测类型">
           <el-radio-group v-model="editForm.hasReference">
@@ -94,7 +98,12 @@
       <!-- Step 1: 上传文件 -->
       <div v-if="uploadStep === 1">
         <el-form :model="uploadForm" label-width="80px">
-          <el-form-item label="名称"><el-input v-model="uploadForm.name" placeholder="请输入数据集名称" /></el-form-item>
+          <el-form-item label="名称"><el-input v-model="uploadForm.name" placeholder="请输入数据集名称" @blur="checkUploadName" @input="onUploadNameInput" />
+            <div v-if="uploadNameWarning" class="name-warn warn-error">
+              <el-icon><WarningFilled /></el-icon>
+              <span>{{ uploadNameWarning }}</span>
+            </div>
+          </el-form-item>
           <el-form-item label="评测类型">
             <el-radio-group v-model="uploadForm.hasReference">
               <el-radio :label="1">含参考答案（对照评测）</el-radio>
@@ -138,13 +147,19 @@
 
       <!-- Step 2: 字段映射 -->
       <div v-if="uploadStep === 2">
-        <el-alert title="请为每个字段选择角色，系统已自动推荐映射" type="info" :closable="false" show-icon style="margin-bottom: 16px" />
+        <el-alert title="勾选需要导入的字段，未勾选的字段将被忽略" type="info" :closable="false" show-icon style="margin-bottom: 16px" />
         <div v-if="previewData.previewRows && previewData.previewRows.length" style="margin-bottom: 16px; overflow-x: auto">
           <el-table :data="previewData.previewRows" stripe border size="small" max-height="200">
             <el-table-column v-for="col in previewData.columns" :key="col" :prop="col" :label="col" min-width="120" show-overflow-tooltip />
           </el-table>
         </div>
         <el-table :data="mappingFields" stripe border size="small">
+          <el-table-column label="" width="45" align="center">
+            <template #header>
+              <el-checkbox :model-value="mappingFields.length > 0 && mappingFields.every(f => f.selected)" @change="val => mappingFields.forEach(f => f.selected = val)" />
+            </template>
+            <template #default="{ row }"><el-checkbox v-model="row.selected" /></template>
+          </el-table-column>
           <el-table-column prop="fieldName" label="原始字段名" width="140" />
           <el-table-column label="显示名称" width="150">
             <template #default="{ row }"><el-input v-model="row.displayName" size="small" /></template>
@@ -154,6 +169,7 @@
               <el-select v-model="row.role" size="small">
                 <el-option label="问题(QUESTION)" value="QUESTION" /><el-option label="参考答案(REFERENCE)" value="REFERENCE" />
                 <el-option label="上下文(CONTEXT)" value="CONTEXT" /><el-option label="分类(CATEGORY)" value="CATEGORY" />
+                <el-option label="模型回答(MODEL_RESPONSE)" value="MODEL_RESPONSE" />
                 <el-option label="自定义(CUSTOM)" value="CUSTOM" />
               </el-select>
             </template>
@@ -209,36 +225,71 @@ export default {
     const mappingFields = ref([])
     const showEditDialog = ref(false)
     const editing = ref(false)
-    const editForm = ref({ id: null, name: '', description: '' })
+    const editForm = ref({ id: null, name: '', originalName: '', description: '', version: 1 })
+    const editNameWarning = ref('')
+    const uploadNameWarning = ref('')
+
+    // 检测上传名称占用：同名直接拒绝（列表页只能新建，升版本请到详情页）
+    const checkUploadName = async () => {
+      const name = (uploadForm.value.name || '').trim()
+      if (!name) { uploadNameWarning.value = ''; return }
+      try {
+        const res = await datasetApi.checkName(name)
+        const info = res.data
+        if (info.exists) {
+          uploadNameWarning.value = `已存在同名数据集「${name}」，请更换名称`
+        } else {
+          uploadNameWarning.value = ''
+        }
+      } catch { uploadNameWarning.value = '' }
+    }
 
     const openEdit = (row) => {
       editForm.value = {
         id: row.id,
         name: row.name,
+        originalName: row.name,
         description: row.description || '',
         hasReference: row.hasReference !== undefined && row.hasReference !== null ? row.hasReference : 1,
-        hasModelResponse: row.hasModelResponse !== undefined && row.hasModelResponse !== null ? row.hasModelResponse : 0
+        hasModelResponse: row.hasModelResponse !== undefined && row.hasModelResponse !== null ? row.hasModelResponse : 0,
+        version: row.version || 1
       }
+      editNameWarning.value = ''
       showEditDialog.value = true
+      checkEditName()
     }
 
-    // 提交新版本：打开上传弹窗并预填名称/模式
+    // 检测编辑重命名占用：排除自身名称组（原名称的所有版本），同名即拒绝
+    const checkEditName = async () => {
+      const name = (editForm.value.name || '').trim()
+      if (!name) { editNameWarning.value = ''; return }
+      try {
+        const res = await datasetApi.checkName(name, editForm.value.id, editForm.value.originalName)
+        const info = res.data
+        if (info.exists) {
+          editNameWarning.value = `名称「${name}」已被其他数据集使用（${info.versionCount} 个版本），请更换名称`
+        } else {
+          editNameWarning.value = ''
+        }
+      } catch { editNameWarning.value = '' }
+    }
+
+    // 输入变化时先清空提示，等失焦/提交时重新检测
+    const onUploadNameInput = () => { uploadNameWarning.value = '' }
+    const onEditNameInput = () => { editNameWarning.value = '' }
+
+    // 提交新版本：跳到详情页版本历史，在那里显式提交
     const openNewVersion = (row) => {
-      uploadForm.value = {
-        name: row.name,
-        description: row.description || '',
-        hasReference: row.hasReference !== undefined && row.hasReference !== null ? row.hasReference : 1,
-        hasModelResponse: row.hasModelResponse !== undefined && row.hasModelResponse !== null ? row.hasModelResponse : 0
-      }
-      uploadStep.value = 1
-      uploadFile.value = null
-      previewData.value = {}
-      mappingFields.value = []
-      showUploadDialog.value = true
+      router.push(`/dataset/${row.id}?tab=version`)
     }
 
     const handleEditSave = async () => {
       if (!editForm.value.name.trim()) { ElMessage.warning('请输入数据集名称'); return }
+      await checkEditName()
+      if (editNameWarning.value) {
+        ElMessage.error(editNameWarning.value)
+        return
+      }
       editing.value = true
       try {
         await datasetApi.updateInfo(editForm.value.id, {
@@ -293,6 +344,11 @@ export default {
     const handlePreview = async () => {
       if (!uploadForm.value.name) { ElMessage.warning('请输入数据集名称'); return }
       if (!uploadFile.value) { ElMessage.warning('请选择文件'); return }
+      await checkUploadName()
+      if (uploadNameWarning.value) {
+        ElMessage.error(uploadNameWarning.value)
+        return
+      }
       previewing.value = true
       try {
         const fd = new FormData()
@@ -302,13 +358,21 @@ export default {
         mappingFields.value = (res.data.suggestedMapping || []).map(m => ({
           fieldName: m.fieldName, displayName: m.displayName || m.fieldName,
           fieldType: m.fieldType || 'TEXT', role: m.role || 'CUSTOM',
-          description: m.description || '', required: m.required || 0, sortOrder: m.sortOrder || 0
+          description: m.description || '', required: m.required || 0, sortOrder: m.sortOrder || 0,
+          selected: true
         }))
         uploadStep.value = 2
       } finally { previewing.value = false }
     }
 
     const handleUpload = async () => {
+      const selectedFields = mappingFields.value.filter(f => f.selected)
+      if (!selectedFields.length) { ElMessage.warning('请至少勾选一个字段'); return }
+      await checkUploadName()
+      if (uploadNameWarning.value) {
+        ElMessage.error(uploadNameWarning.value)
+        return
+      }
       uploading.value = true
       try {
         const fd = new FormData()
@@ -317,15 +381,17 @@ export default {
         fd.append('description', uploadForm.value.description || '')
         fd.append('hasReference', uploadForm.value.hasReference)
         fd.append('hasModelResponse', uploadForm.value.hasModelResponse)
-        fd.append('schemaFields', JSON.stringify(mappingFields.value))
+        fd.append('schemaFields', JSON.stringify(selectedFields))
         fd.append('columnMapping', JSON.stringify(
-          mappingFields.value.reduce((m, f) => { m[f.fieldName] = f.role; return m }, {})
+          selectedFields.reduce((m, f) => { m[f.fieldName] = f.role; return m }, {})
         ))
+        console.log('[Upload] schemaFields:', JSON.stringify(selectedFields))
         await datasetApi.upload(fd)
         ElMessage.success('上传成功')
         showUploadDialog.value = false
         uploadStep.value = 1
-        uploadForm.value = { name: '', description: '', hasReference: 1 }
+        uploadForm.value = { name: '', description: '', hasReference: 1, hasModelResponse: 0 }
+        uploadNameWarning.value = ''
         uploadFile.value = null
         loadDatasets()
       } finally { uploading.value = false }
@@ -347,7 +413,9 @@ export default {
       handleFileChange, handleFileExceed, handlePreview, handleUpload, handleDelete, openNewVersion,
       formatFileSize,
       totalSamples, formatDate,
-      showEditDialog, editing, editForm, openEdit, handleEditSave
+      showEditDialog, editing, editForm, openEdit, handleEditSave,
+      checkUploadName, checkEditName, onUploadNameInput, onEditNameInput,
+      uploadNameWarning, editNameWarning
     }
   }
 }
@@ -421,6 +489,17 @@ export default {
 .ds-card-actions .el-button { margin-left: 0; }
 .ds-card-footer .el-button { padding: 4px 8px; font-size: 11px; margin-left: 0; }
 .upload-tip { font-size: 12px; color: var(--text-mute); line-height: 1.5; margin-top: 4px; }
+
+/* 名称重复提示 */
+.name-warn {
+  display: flex; align-items: center; gap: 6px;
+  width: 100%; margin-top: 6px; padding: 6px 10px;
+  border-radius: 6px; font-size: 12px; line-height: 1.5;
+}
+.name-warn.warn-info { background: rgba(99,102,241,0.08); color: #4f46e5; border: 1px solid rgba(99,102,241,0.2); }
+.name-warn.warn-error { background: rgba(239,68,68,0.08); color: #dc2626; border: 1px solid rgba(239,68,68,0.25); }
+.name-warn .el-icon { flex-shrink: 0; }
+.name-warn b { color: #4f46e5; }
 
 /* 上传文件选择 */
 .up-file-select { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }

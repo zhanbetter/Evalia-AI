@@ -1,215 +1,248 @@
 <template>
   <div class="task-create-page">
-    <div class="page-header">
-      <h2>创建评测任务</h2>
-      <div>
-        <el-button v-if="hasDraft()" size="small" type="danger" plain @click="handleClearDraft">清空草稿</el-button>
-        <el-button @click="$router.back()">返回</el-button>
+    <!-- 顶部工具栏（与评估器编辑器对齐） -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <el-button text @click="$router.back()" class="back-btn">
+          <el-icon><ArrowLeft /></el-icon><span>返回</span>
+        </el-button>
+        <div class="topbar-sep" />
+        <span class="topbar-title">创建评测任务</span>
       </div>
-    </div>
+      <div class="topbar-right">
+        <el-button v-if="hasDraft()" size="small" type="danger" plain @click="handleClearDraft">清空草稿</el-button>
+        <el-button type="primary" @click="handleCreate" :loading="creating" :disabled="!canCreate">
+          <el-icon style="margin-right:4px"><Check /></el-icon>创建任务
+        </el-button>
+      </div>
+    </header>
 
     <el-alert v-if="selectedDataset || selectedModelIds.length || taskForm.name"
               title="已自动保存草稿，中途离开后再回来可恢复"
               type="success" :closable="false" show-icon style="margin-bottom: 16px" />
 
-    <div class="form-body" v-loading="loading">
-      <!-- 1. 数据集选择 -->
-      <div class="form-row">
-        <div class="form-row-left">
-          <span class="form-num">1</span>
-          <div>
-            <div class="form-label">数据集</div>
-            <div class="form-hint">选择要评测的数据集</div>
+    <div class="form-layout">
+      <div class="form-body" v-loading="loading">
+        <!-- 1. 任务名称 -->
+        <div class="form-row">
+          <div class="form-row-left">
+            <span class="form-num">1</span>
+            <div>
+              <div class="form-label">任务名称</div>
+              <div class="form-hint">为本次评测命名</div>
+            </div>
+          </div>
+          <div class="form-row-right">
+            <el-input v-model="taskForm.name" placeholder="请输入评测任务名称" style="flex:1" />
           </div>
         </div>
-        <div class="form-row-right">
-          <el-select v-model="selectedDatasetId" filterable placeholder="请选择数据集"
-            @change="onDatasetChange">
-            <el-option v-for="ds in datasets" :key="ds.id" :value="ds.id"
-              :label="`${ds.name}（v${ds.version}，${ds.totalCount} 条，${ds.hasModelResponse === 1 ? '含回答' : '只有问题'}）`" />
-          </el-select>
-        </div>
-      </div>
-      <!-- 回答来源提示（数据集选中后显示） -->
-      <div class="info-bar" v-if="selectedDataset">
-        <span class="info-bar-label">回答来源：</span>
-        <el-tag size="small" :type="answerSource === 'api' ? 'warning' : 'success'">
-          {{ answerSource === 'api' ? '现场调用模型生成' : '数据集已有回答' }}
-        </el-tag>
-        <span class="info-bar-tip">
-          {{ answerSource === 'api' ? '评测时将调用被测模型 API 生成回答' : '评测时直接从数据集读取' }}
-        </span>
-      </div>
 
-      <!-- 2. 被测模型（仅 API 回答时） -->
-      <div class="form-row" v-if="answerSource === 'api'">
-        <div class="form-row-left">
-          <span class="form-num">2</span>
-          <div>
-            <div class="form-label">被测模型</div>
-            <div class="form-hint">你的 AI 产品 API，评测时生成回答</div>
+        <!-- 2. 数据集选择 -->
+        <div class="form-row">
+          <div class="form-row-left">
+            <span class="form-num">2</span>
+            <div>
+              <div class="form-label">数据集</div>
+              <div class="form-hint">选择要评测的数据集</div>
+            </div>
+          </div>
+          <div class="form-row-right" style="gap:8px">
+            <el-select v-model="selectedDatasetName" filterable placeholder="选择数据集名称"
+              @change="onDatasetNameChange" style="flex:1">
+              <el-option v-for="g in groupedDatasets" :key="g.name" :label="g.name" :value="g.name" />
+            </el-select>
+            <el-select v-model="selectedDatasetId" filterable placeholder="选择版本"
+              :disabled="!selectedDatasetName" @change="onDatasetChange" style="flex:1">
+              <el-option v-for="ds in datasetVersions" :key="ds.id" :value="ds.id"
+                :label="`v${ds.version}（${ds.totalCount} 条，${ds.hasModelResponse === 1 ? '含回答' : '只有问题'}）`">
+                <span>v{{ ds.version }}</span>
+                <span style="color:var(--text-mute);font-size:11px;margin-left:6px">{{ ds.totalCount }} 条</span>
+                <el-tag v-if="ds.id === latestDatasetId" size="small" type="success" style="margin-left:auto">最新</el-tag>
+              </el-option>
+            </el-select>
+            <el-tooltip content="预览数据集" placement="top">
+              <el-button size="small" circle @click="previewItem('dataset')" :disabled="!selectedDataset">
+                <el-icon><View /></el-icon>
+              </el-button>
+            </el-tooltip>
           </div>
         </div>
-        <div class="form-row-right">
-          <el-select v-model="selectedModelIds" multiple filterable collapse-tags collapse-tags-tooltip
-            placeholder="选择被测模型">
-            <el-option v-for="m in evaluatedModels" :key="m.id" :label="`${m.name}（${providerLabel(m.provider)}）`" :value="m.id" />
-          </el-select>
-        </div>
-      </div>
 
-      <!-- 3. 裁判模型 -->
-      <div class="form-row">
-        <div class="form-row-left">
-          <span class="form-num">{{ answerSource === 'api' ? 3 : 2 }}</span>
-          <div>
-            <div class="form-label">裁判模型</div>
-            <div class="form-hint">判定 badcase 的 AI，必须选择</div>
+        <!-- 3. 裁判模型 -->
+        <div class="form-row">
+          <div class="form-row-left">
+            <span class="form-num">3</span>
+            <div>
+              <div class="form-label">裁判模型</div>
+              <div class="form-hint">判定 badcase 的 AI，必须选择</div>
+            </div>
+          </div>
+          <div class="form-row-right">
+            <el-select v-model="judgeModelId" filterable placeholder="选择裁判模型" style="flex:1">
+              <el-option v-for="m in judgeModels" :key="m.id" :label="`${m.name}（${providerLabel(m.provider)}）`" :value="m.id" />
+            </el-select>
+            <el-tooltip content="预览模型" placement="top">
+              <el-button size="small" circle @click="previewItem('judgeModel')" :disabled="!judgeModelId">
+                <el-icon><View /></el-icon>
+              </el-button>
+            </el-tooltip>
           </div>
         </div>
-        <div class="form-row-right">
-          <el-select v-model="judgeModelId" filterable placeholder="选择裁判模型">
-            <el-option v-for="m in judgeModels" :key="m.id" :label="`${m.name}（${providerLabel(m.provider)}）`" :value="m.id" />
-          </el-select>
-        </div>
-      </div>
 
-      <!-- 4. 评估器 -->
-      <div class="form-row">
-        <div class="form-row-left">
-          <span class="form-num">{{ answerSource === 'api' ? 4 : 3 }}</span>
-          <div>
-            <div class="form-label">评估器</div>
-            <div class="form-hint">选择评测维度标准</div>
+        <!-- 4. 被测模型（仅 API 回答时） -->
+        <div class="form-row" v-if="answerSource === 'api'">
+          <div class="form-row-left">
+            <span class="form-num">4</span>
+            <div>
+              <div class="form-label">被测模型</div>
+              <div class="form-hint">你的 AI 产品 API，评测时生成回答</div>
+            </div>
+          </div>
+          <div class="form-row-right">
+            <el-select v-model="selectedModelIds" multiple filterable collapse-tags collapse-tags-tooltip
+              placeholder="选择被测模型" style="flex:1">
+              <el-option v-for="m in evaluatedModels" :key="m.id" :label="`${m.name}（${providerLabel(m.provider)}）`" :value="m.id" />
+            </el-select>
           </div>
         </div>
-        <div class="form-row-right">
-          <el-select v-model="selectedPromptId" filterable placeholder="选择评估器"
-            @change="onEvaluatorChange">
-            <el-option v-for="p in availablePrompts" :key="p.id"
-              :label="`${p.name}${p.version && p.version > 1 ? `（v${p.version}）` : '（v1）'}（${p.evaluationMode === 'reference' ? '参考对照' : '质量评判'}）`" :value="p.id" />
-          </el-select>
-        </div>
-      </div>
-      <!-- 评估器模式冲突警告 -->
-      <el-alert v-if="modeConflictPrompts.length" type="warning" :closable="false" show-icon
-        :title="`以下评估器需要参考答案，但当前数据集「${selectedDataset?.name || ''}」没有参考答案，评测结果会失真：${modeConflictPrompts.map(p => '「' + p.name + '」').join('、')}`"
-        style="margin-bottom: 16px" />
 
-      <!-- 可用变量面板 -->
-      <div v-if="datasetFields.length" class="var-panel">
-        <div class="var-panel-head">
-          <span class="var-panel-title">
-            <el-icon><InfoFilled /></el-icon>
-            数据集可用变量
-          </span>
-          <span class="var-panel-tip">在评估器 prompt 中用 <code>${字段名}</code> 引用，如 <code>${背景}</code>、<code>${case_type}</code></span>
-        </div>
-        <div class="var-panel-body">
-          <div v-for="f in datasetFields" :key="f.fieldName" class="var-chip"
-            :class="{ 'var-used': evaluatorUsedVars.has(f.fieldName) }"
-            @click="copyVarName(f.fieldName)"
-            :title="`点击复制 $${f.fieldName}，角色: ${f.role || 'CUSTOM'}`">
-            <span class="var-chip-name">{{ f.fieldName }}</span>
-            <span class="var-chip-role" v-if="f.role && f.role !== 'CUSTOM'">{{ f.role }}</span>
-            <el-icon class="var-chip-copy" :size="12"><CopyDocument /></el-icon>
+        <!-- 5. 评估器 -->
+        <div class="form-row">
+          <div class="form-row-left">
+            <span class="form-num">{{ answerSource === 'api' ? 5 : 4 }}</span>
+            <div>
+              <div class="form-label">评估器</div>
+              <div class="form-hint">选择评测维度标准</div>
+            </div>
           </div>
-          <div class="var-chip var-builtin" title="系统内置变量，自动可用">
-            <span class="var-chip-name">model_response</span>
-            <span class="var-chip-role">SYSTEM</span>
+          <div class="form-row-right" style="gap:8px">
+            <el-select v-model="selectedPromptName" filterable placeholder="选择评估器名称"
+              @change="onPromptNameChange" style="flex:1">
+              <el-option v-for="g in groupedPrompts" :key="g.name" :label="g.name" :value="g.name" />
+            </el-select>
+            <el-select v-model="selectedPromptId" filterable placeholder="选择版本"
+              :disabled="!selectedPromptName" @change="onEvaluatorChange" style="flex:1">
+              <el-option v-for="p in promptVersions" :key="p.id" :value="p.id"
+                :label="`v${p.version}（${p.evaluationMode === 'reference' ? '参考对照' : '质量评判'}）`">
+                <span>v{{ p.version }}</span>
+                <span style="color:var(--text-mute);font-size:11px;margin-left:6px">{{ p.evaluationMode === 'reference' ? '参考对照' : '质量评判' }}</span>
+                <el-tag v-if="p.id === latestPromptId" size="small" type="success" style="margin-left:auto">最新</el-tag>
+              </el-option>
+            </el-select>
+            <el-tooltip content="预览评估器" placement="top">
+              <el-button size="small" circle @click="previewItem('evaluator')" :disabled="!selectedPromptId">
+                <el-icon><View /></el-icon>
+              </el-button>
+            </el-tooltip>
           </div>
         </div>
-        <div v-if="evaluatorUsedVars.size > 0" class="var-panel-foot">
-          <span class="var-used-label">评估器已引用：</span>
-          <code v-for="v in evaluatorUsedVars" :key="v" class="var-used-tag">${{ v }}</code>
-        </div>
-        <div v-else-if="selectedPromptId" class="var-panel-foot var-panel-foot--warn">
-          当前评估器 prompt 未引用任何变量，模型评判时只能看到固定文本
-        </div>
-      </div>
 
-      <!-- 5. 字段映射（评估器选中后自动出现） -->
-      <div v-if="selectedPromptId && hasFieldMapping" class="form-row">
-        <div class="form-row-left">
-          <span class="form-num">{{ answerSource === 'api' ? 5 : 4 }}</span>
-          <div>
-            <div class="form-label">字段映射</div>
-            <div class="form-hint">将评估器中的占位符映射到数据集字段</div>
+        <!-- 评估器模式冲突警告 -->
+        <el-alert v-if="modeConflictPrompts.length" type="warning" :closable="false" show-icon
+          :title="`以下评估器需要参考答案，但当前数据集「${selectedDataset?.name || ''}」没有参考答案，评测结果会失真：${modeConflictPrompts.map(p => '「' + p.name + '」').join('、')}`"
+          style="margin-bottom: 16px" />
+
+        <!-- 6. 字段映射（评估器选中后自动出现） -->
+        <div v-if="selectedPromptId && hasFieldMapping" class="form-row">
+          <div class="form-row-left">
+            <span class="form-num">{{ answerSource === 'api' ? 6 : 5 }}</span>
+            <div>
+              <div class="form-label">字段映射</div>
+              <div class="form-hint">将评估器中的占位符映射到数据集字段</div>
+            </div>
           </div>
-        </div>
-        <div class="form-row-right form-row-right--wide">
-          <el-table :data="currentMappingFields" stripe border size="small">
-            <el-table-column label="占位符" width="180">
-              <template #default="{ row }"><code class="ph-code">{{ row.raw }}</code></template>
-            </el-table-column>
-            <el-table-column label="→ 数据集字段" width="260">
-              <template #default="{ row }">
-                <el-select v-model="row.datasetField" size="small" placeholder="选择字段" filterable>
-                  <el-option v-if="row.placeholder === 'model_response'" label="模型回复（系统内置）" value="model_response" />
-                  <el-option v-for="f in datasetFields" :key="f.fieldName" :label="`${f.displayName}（${f.fieldName}）`" :value="f.fieldName" />
-                </el-select>
-              </template>
-            </el-table-column>
-            <el-table-column label="字段含义" min-width="200">
-              <template #default="{ row }">
-                <el-tag v-if="row.datasetField === 'model_response'" size="small" type="success">系统注入：模型回复</el-tag>
-                <template v-else-if="mappingFieldExists(row)">
-                  <span class="field-desc">{{ getDatasetFieldDesc(row.datasetField) || row.datasetField }}</span>
+          <div class="form-row-right form-row-right--wide">
+            <el-table :data="currentMappingFields" stripe border size="small" style="flex:1">
+              <el-table-column label="占位符" width="180">
+                <template #default="{ row }"><code class="ph-code">{{ row.raw }}</code></template>
+              </el-table-column>
+              <el-table-column label="→ 数据集字段" width="260">
+                <template #default="{ row }">
+                  <el-select v-model="row.datasetField" size="small" placeholder="选择字段" filterable>
+                    <el-option v-if="row.placeholder === 'model_response'" label="模型回复（系统内置）" value="model_response" />
+                    <el-option v-for="f in datasetFields" :key="f.fieldName" :label="`${f.displayName}（${f.fieldName}）`" :value="f.fieldName" />
+                  </el-select>
                 </template>
-                <el-tag v-else-if="row.datasetField" size="small" type="danger">字段不存在</el-tag>
-                <span v-else class="field-desc-empty">-</span>
-              </template>
-            </el-table-column>
-          </el-table>
-        </div>
-      </div>
-
-      <!-- 6. 任务名称 -->
-      <div class="form-row">
-        <div class="form-row-left">
-          <span class="form-num">{{ answerSource === 'api' ? 6 : 5 }}</span>
-          <div>
-            <div class="form-label">任务名称</div>
-            <div class="form-hint">为本次评测命名</div>
-          </div>
-        </div>
-        <div class="form-row-right">
-          <el-input v-model="taskForm.name" placeholder="请输入评测任务名称" style="max-width: 360px" />
-        </div>
-      </div>
-
-      <!-- 7. 调用模板（仅 API 回答时） -->
-      <div class="form-row" v-if="answerSource === 'api'">
-        <div class="form-row-left">
-          <span class="form-num">7</span>
-          <div>
-            <div class="form-label">调用模板</div>
-            <div class="form-hint">调用被测模型的模板，支持占位符</div>
-          </div>
-        </div>
-        <div class="form-row-right form-row-right--wide">
-          <el-input v-model="callPromptTemplate" type="textarea" :rows="2"
-            placeholder="请回答以下问题：{question}" style="max-width: 480px" />
-          <div v-if="datasetFields.length" class="call-prompt-vars">
-            <span class="call-prompt-vars-label">可用变量：</span>
-            <code v-for="f in datasetFields" :key="f.fieldName" class="call-prompt-var"
-              @click="insertCallVar(f.fieldName)" :title="`点击插入到模板`">${{ f.fieldName }}</code>
+              </el-table-column>
+              <el-table-column label="字段含义" min-width="200">
+                <template #default="{ row }">
+                  <el-tag v-if="row.datasetField === 'model_response'" size="small" type="success">系统注入：模型回复</el-tag>
+                  <template v-else-if="mappingFieldExists(row)">
+                    <span class="field-desc">{{ getDatasetFieldDesc(row.datasetField) || row.datasetField }}</span>
+                  </template>
+                  <el-tag v-else-if="row.datasetField" size="small" type="danger">字段不存在</el-tag>
+                  <span v-else class="field-desc-empty">-</span>
+                </template>
+              </el-table-column>
+            </el-table>
           </div>
         </div>
       </div>
 
-      <!-- 创建按钮 -->
-      <div class="form-footer">
-        <el-button size="large" type="primary" :disabled="!canCreate" @click="handleCreate" :loading="creating">
-          创建评测任务
-        </el-button>
-      </div>
+      <!-- 右侧预览面板 -->
+      <transition name="preview-slide">
+        <div v-if="previewType" class="preview-panel">
+          <div class="preview-head">
+            <span class="preview-title">{{ previewTitle }}</span>
+            <el-button size="small" circle @click="previewType = null">
+              <el-icon><Close /></el-icon>
+            </el-button>
+          </div>
+          <div class="preview-body" v-loading="previewLoading">
+            <!-- 数据集预览 -->
+            <template v-if="previewType === 'dataset' && previewData">
+              <div class="preview-section">
+                <div class="preview-kv"><span class="preview-k">名称</span><span class="preview-v">{{ previewData.name }}</span></div>
+                <div class="preview-kv"><span class="preview-k">版本</span><span class="preview-v">v{{ previewData.version }}</span></div>
+                <div class="preview-kv"><span class="preview-k">数据量</span><span class="preview-v">{{ previewData.totalCount }} 条</span></div>
+                <div class="preview-kv"><span class="preview-k">回答</span><span class="preview-v">{{ previewData.hasModelResponse === 1 ? '含模型回答' : '只有问题' }}</span></div>
+                <div class="preview-kv"><span class="preview-k">参考答案</span><span class="preview-v">{{ previewData.hasReference === 1 ? '有' : '无' }}</span></div>
+                <div class="preview-kv"><span class="preview-k">创建时间</span><span class="preview-v">{{ previewData.createdAt }}</span></div>
+              </div>
+              <div class="preview-section" v-if="previewDatasetFields.length">
+                <div class="preview-section-title">字段 Schema</div>
+                <div v-for="f in previewDatasetFields" :key="f.fieldName" class="preview-field-row">
+                  <code class="preview-field-name">{{ f.fieldName }}</code>
+                  <el-tag v-if="f.role && f.role !== 'CUSTOM'" size="small" type="info">{{ f.role }}</el-tag>
+                  <span class="preview-field-type">{{ f.fieldType }}</span>
+                  <span class="preview-field-desc" v-if="f.description">{{ f.description }}</span>
+                </div>
+              </div>
+            </template>
+            <!-- 评估器预览 -->
+            <template v-if="previewType === 'evaluator' && previewData">
+              <div class="preview-section">
+                <div class="preview-kv"><span class="preview-k">名称</span><span class="preview-v">{{ previewData.name }}</span></div>
+                <div class="preview-kv"><span class="preview-k">版本</span><span class="preview-v">v{{ previewData.version }}</span></div>
+                <div class="preview-kv"><span class="preview-k">模式</span><span class="preview-v">{{ previewData.evaluationMode === 'reference' ? '参考对照' : '质量评判' }}</span></div>
+                <div class="preview-kv"><span class="preview-k">类型</span><span class="preview-v">{{ previewData.promptType === 'structured' ? '结构化规则' : '自由文本' }}</span></div>
+              </div>
+              <div class="preview-section" v-if="previewData.promptTemplate">
+                <div class="preview-section-title">Prompt 模板</div>
+                <pre class="preview-pre">{{ previewData.promptTemplate }}</pre>
+              </div>
+            </template>
+            <!-- 模型预览 -->
+            <template v-if="(previewType === 'judgeModel') && previewData">
+              <div class="preview-section">
+                <div class="preview-kv"><span class="preview-k">名称</span><span class="preview-v">{{ previewData.name }}</span></div>
+                <div class="preview-kv"><span class="preview-k">模型ID</span><span class="preview-v" style="font-family:Menlo,monospace;font-size:12px">{{ previewData.modelId }}</span></div>
+                <div class="preview-kv"><span class="preview-k">提供商</span><span class="preview-v">{{ providerLabel(previewData.provider) }}</span></div>
+                <div class="preview-kv"><span class="preview-k">类型</span><span class="preview-v">{{ previewData.modelType === 'judge' ? '裁判模型' : '被测模型' }}</span></div>
+                <div class="preview-kv"><span class="preview-k">温度</span><span class="preview-v">{{ previewData.temperature }}</span></div>
+                <div class="preview-kv"><span class="preview-k">最大Token</span><span class="preview-v">{{ previewData.maxTokens }}</span></div>
+                <div class="preview-kv"><span class="preview-k">API 地址</span><span class="preview-v" style="font-family:Menlo,monospace;font-size:12px;word-break:break-all">{{ previewData.apiBase }}</span></div>
+              </div>
+            </template>
+          </div>
+        </div>
+      </transition>
     </div>
   </div>
 </template>
 
 <script>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { datasetApi, modelApi, promptApi, taskApi } from '../../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -223,21 +256,77 @@ export default {
     const loading = ref(false)
     const creating = ref(false)
     const datasets = ref([])
+    const selectedDatasetName = ref('')
     const selectedDatasetId = ref(null)
     const selectedDataset = ref(null)
     const availableModels = ref([])
     const selectedModelIds = ref([])
     const judgeModelId = ref(null)
     const availablePrompts = ref([])
+    const selectedPromptName = ref('')
     const selectedPromptId = ref(null)
     const taskForm = ref({ name: '' })
     const datasetFields = ref([])
     const judgePromptMappings = ref({})
     const answerSource = ref('dataset')
-    const callPromptTemplate = ref('请回答以下问题：{question}')
+
+    // 预览面板状态
+    const previewType = ref(null)
+    const previewData = ref(null)
+    const previewLoading = ref(false)
+    const previewDatasetFields = ref([])
+
+    const previewTitle = computed(() => ({
+      dataset: '数据集详情',
+      evaluator: '评估器详情',
+      judgeModel: '裁判模型详情'
+    }[previewType.value] || ''))
 
     const evaluatedModels = computed(() => availableModels.value.filter(m => !m.modelType || m.modelType === 'evaluated' || m.modelType === 'both'))
     const judgeModels = computed(() => availableModels.value.filter(m => m.modelType === 'judge' || m.modelType === 'both'))
+
+    // 按名称分组，版本降序
+    const groupedDatasets = computed(() => {
+      const map = {}
+      for (const ds of datasets.value) {
+        if (!map[ds.name]) map[ds.name] = []
+        map[ds.name].push(ds)
+      }
+      return Object.entries(map).map(([name, items]) => {
+        items.sort((a, b) => (b.version || 0) - (a.version || 0))
+        return { name, versions: items, latest: items[0].id }
+      }).sort((a, b) => a.name.localeCompare(b.name))
+    })
+
+    const datasetVersions = computed(() => {
+      const g = groupedDatasets.value.find(g => g.name === selectedDatasetName.value)
+      return g ? g.versions : []
+    })
+    const latestDatasetId = computed(() => {
+      const g = groupedDatasets.value.find(g => g.name === selectedDatasetName.value)
+      return g ? g.latest : null
+    })
+
+    const groupedPrompts = computed(() => {
+      const map = {}
+      for (const p of availablePrompts.value) {
+        if (!map[p.name]) map[p.name] = []
+        map[p.name].push(p)
+      }
+      return Object.entries(map).map(([name, items]) => {
+        items.sort((a, b) => (b.version || 0) - (a.version || 0))
+        return { name, versions: items, latest: items[0].id }
+      }).sort((a, b) => a.name.localeCompare(b.name))
+    })
+
+    const promptVersions = computed(() => {
+      const g = groupedPrompts.value.find(g => g.name === selectedPromptName.value)
+      return g ? g.versions : []
+    })
+    const latestPromptId = computed(() => {
+      const g = groupedPrompts.value.find(g => g.name === selectedPromptName.value)
+      return g ? g.latest : null
+    })
 
     const modeConflictPrompts = computed(() => {
       if (!selectedDataset.value) return []
@@ -245,20 +334,6 @@ export default {
       return availablePrompts.value.filter(p =>
         selectedPromptId.value === p.id && p.evaluationMode === 'reference'
       )
-    })
-
-    const evaluatorUsedVars = computed(() => {
-      const vars = new Set()
-      const pid = selectedPromptId.value
-      if (!pid) return vars
-      const prompt = availablePrompts.value.find(p => p.id === pid)
-      if (!prompt) return vars
-      extractPlaceholders(prompt.promptTemplate || '').forEach(p => vars.add(p.name))
-      try {
-        const dc = JSON.parse(prompt.dimensionsConfig || '{}')
-        if (dc.context_template) extractPlaceholders(dc.context_template).forEach(p => vars.add(p.name))
-      } catch {}
-      return vars
     })
 
     const hasFieldMapping = computed(() => {
@@ -280,28 +355,42 @@ export default {
 
     const providerLabel = (p) => ({ openai: 'OpenAI', deepseek: 'DeepSeek', zhipu: '智谱', tongyi: '通义', other: '其他' }[p] || p || '-')
 
-    const copyVarName = (fieldName) => {
-      const text = '${' + fieldName + '}'
-      navigator.clipboard.writeText(text).then(() => ElMessage.success(`已复制 ${text}`)).catch(() => ElMessage.info(`变量语法: ${text}`))
-    }
-
-    const insertCallVar = (fieldName) => {
-      callPromptTemplate.value += '${' + fieldName + '}'
-      ElMessage.success(`已插入 $${fieldName}`)
+    // ===== 预览 =====
+    const previewItem = async (type) => {
+      if (previewType.value === type) { previewType.value = null; return }
+      previewType.value = type
+      previewData.value = null
+      previewDatasetFields.value = []
+      previewLoading.value = true
+      try {
+        if (type === 'dataset' && selectedDataset.value) {
+          previewData.value = selectedDataset.value
+          try { const res = await datasetApi.getSchema(selectedDataset.value.id); previewDatasetFields.value = res.data || [] } catch {}
+        } else if (type === 'evaluator' && selectedPromptId.value) {
+          const p = availablePrompts.value.find(x => x.id === selectedPromptId.value)
+          previewData.value = p || null
+        } else if (type === 'judgeModel' && judgeModelId.value) {
+          const m = availableModels.value.find(x => x.id === judgeModelId.value)
+          previewData.value = m || null
+        }
+      } finally { previewLoading.value = false }
     }
 
     // ===== 草稿持久化 =====
+    let skipSave = false
     const saveDraft = () => {
+      if (skipSave) return
       const draft = {
+        selectedDatasetName: selectedDatasetName.value,
         selectedDatasetId: selectedDataset.value?.id || null,
         selectedModelIds: selectedModelIds.value,
         judgeModelId: judgeModelId.value,
+        selectedPromptName: selectedPromptName.value,
         selectedPromptId: selectedPromptId.value,
         taskForm: { ...taskForm.value },
         datasetFields: datasetFields.value,
         judgePromptMappings: judgePromptMappings.value,
         answerSource: answerSource.value,
-        callPromptTemplate: callPromptTemplate.value,
         savedAt: Date.now()
       }
       try { localStorage.setItem(STORAGE_KEY, JSON.stringify(draft)) } catch {}
@@ -317,11 +406,12 @@ export default {
         }
         selectedModelIds.value = draft.selectedModelIds || []
         judgeModelId.value = draft.judgeModelId || null
+        selectedDatasetName.value = draft.selectedDatasetName || ''
+        selectedPromptName.value = draft.selectedPromptName || ''
         selectedPromptId.value = draft.selectedPromptId || null
         taskForm.value = draft.taskForm || { name: '' }
         datasetFields.value = draft.datasetFields || []
         answerSource.value = draft.answerSource || 'dataset'
-        callPromptTemplate.value = draft.callPromptTemplate || '请回答以下问题：{question}'
         const fixMappings = (mappings) => (mappings || []).map(m => ({ ...m, raw: m.raw || (m.placeholder ? `{${m.placeholder}}` : '') }))
         judgePromptMappings.value = typeof draft.judgePromptMappings === 'object'
           ? Object.fromEntries(Object.entries(draft.judgePromptMappings).map(([k, v]) => [k, fixMappings(v)]))
@@ -333,11 +423,11 @@ export default {
     const clearDraft = () => { try { localStorage.removeItem(STORAGE_KEY) } catch {} }
     const hasDraft = () => { try { return !!localStorage.getItem(STORAGE_KEY) } catch { return false } }
 
-    watch([selectedDatasetId, selectedModelIds, judgeModelId, selectedPromptId, taskForm,
-           datasetFields, judgePromptMappings, answerSource, callPromptTemplate], saveDraft, { deep: true })
+    watch([selectedDatasetName, selectedDatasetId, selectedModelIds, judgeModelId, selectedPromptName, selectedPromptId, taskForm,
+           datasetFields, judgePromptMappings, answerSource], saveDraft, { deep: true })
 
     const loadDatasets = async () => { const res = await datasetApi.list(1, 100); datasets.value = res.data.records }
-    const loadModels = async () => { const res = await modelApi.list(1, 100); availableModels.value = res.data.records.filter(m => m.status === 1) }
+    const loadModels = async () => { const res = await modelApi.list(1, 100, undefined, 1); availableModels.value = res.data.records }
     const loadPrompts = async () => { const res = await promptApi.list(); availablePrompts.value = res.data.records.filter(p => p.status === 1) }
 
     const detectAnswerSource = (ds, fields) => {
@@ -347,6 +437,20 @@ export default {
       if (!fields || !fields.length) return 'api'
       const names = ['model_response', 'response', 'answer', 'output', '模型回答', '回答', 'result']
       return fields.some(f => names.includes((f.fieldName || '').toLowerCase())) ? 'dataset' : 'api'
+    }
+
+    const onDatasetNameChange = (name) => {
+      // 切换名称时自动选最新版本
+      const g = groupedDatasets.value.find(g => g.name === name)
+      if (g && g.latest) {
+        selectedDatasetId.value = g.latest
+        onDatasetChange(g.latest)
+      } else {
+        selectedDatasetId.value = null
+        selectedDataset.value = null
+        datasetFields.value = []
+        answerSource.value = 'dataset'
+      }
     }
 
     const onDatasetChange = async (dsId) => {
@@ -382,6 +486,17 @@ export default {
     const extractPlaceholders = (template) => {
       const matches = (template.match(/\$\{[a-zA-Z_][a-zA-Z0-9_:]*\}|\{[a-zA-Z_][a-zA-Z0-9_:]*\}/g) || [])
       return matches.map(m => ({ name: m.charAt(0) === '$' ? m.slice(2, -1) : m.slice(1, -1), raw: m }))
+    }
+
+    const onPromptNameChange = (name) => {
+      const g = groupedPrompts.value.find(g => g.name === name)
+      if (g && g.latest) {
+        selectedPromptId.value = g.latest
+        onEvaluatorChange(g.latest)
+      } else {
+        selectedPromptId.value = null
+        judgePromptMappings.value = {}
+      }
     }
 
     const onEvaluatorChange = async (pid) => {
@@ -458,7 +573,7 @@ export default {
           datasetId: selectedDataset.value.id,
           judgeModelId: judgeModelId.value || undefined,
           answerSource: answerSource.value,
-          promptTemplate: answerSource.value === 'api' ? (callPromptTemplate.value || '') : '',
+          promptTemplate: '',
           fieldMapping: buildFieldMapping(),
           modelConfigIds: selectedModelIds.value,
           promptIds: selectedPromptId.value ? [selectedPromptId.value] : []
@@ -472,11 +587,16 @@ export default {
 
     const handleClearDraft = async () => {
       await ElMessageBox.confirm('确定清空所有已填内容？', '提示', { type: 'warning' })
+      skipSave = true
       clearDraft()
-      selectedDatasetId.value = null; selectedDataset.value = null
-      selectedModelIds.value = []; judgeModelId.value = null; selectedPromptId.value = null
+      selectedDatasetName.value = ''; selectedDatasetId.value = null; selectedDataset.value = null
+      selectedModelIds.value = []; judgeModelId.value = null
+      selectedPromptName.value = ''; selectedPromptId.value = null
       taskForm.value = { name: '' }; datasetFields.value = []; judgePromptMappings.value = {}
-      answerSource.value = 'dataset'; callPromptTemplate.value = '请回答以下问题：{question}'
+      answerSource.value = 'dataset'
+      previewType.value = null; previewData.value = null
+      await nextTick()
+      skipSave = false
       ElMessage.success('已清空')
     }
 
@@ -487,27 +607,36 @@ export default {
       if (datasetIdToRestore) {
         const ds = datasets.value.find(d => d.id === datasetIdToRestore)
         if (ds) {
+          selectedDatasetName.value = ds.name
           selectedDatasetId.value = ds.id; selectedDataset.value = ds
           answerSource.value = ds.hasModelResponse === 1 ? 'dataset' : 'api'
           if (!datasetFields.value.length) {
             try { const res = await datasetApi.getSchema(ds.id); datasetFields.value = res.data || []; answerSource.value = detectAnswerSource(ds, datasetFields.value) } catch {}
           }
-          if (selectedPromptId.value && !Object.keys(judgePromptMappings.value).length) await buildMappingsForEvaluator(selectedPromptId.value)
-        } else { selectedDatasetId.value = null; selectedDataset.value = null; clearDraft() }
+          if (selectedPromptId.value && !Object.keys(judgePromptMappings.value).length) {
+            const savedPrompt = availablePrompts.value.find(p => p.id === selectedPromptId.value)
+            if (savedPrompt) selectedPromptName.value = savedPrompt.name
+            await buildMappingsForEvaluator(selectedPromptId.value)
+          }
+        } else { selectedDatasetId.value = null; selectedDataset.value = null; selectedDatasetName.value = ''; clearDraft() }
       }
       loading.value = false
     })
 
     return {
-      loading, creating, datasets, selectedDatasetId, selectedDataset, onDatasetChange,
-      availableModels, selectedModelIds, judgeModelId, availablePrompts, selectedPromptId,
+      loading, creating, datasets, selectedDatasetName, selectedDatasetId, selectedDataset,
+      onDatasetNameChange, onDatasetChange, datasetVersions, latestDatasetId,
+      availableModels, selectedModelIds, judgeModelId, availablePrompts,
+      selectedPromptName, selectedPromptId, onPromptNameChange,
+      promptVersions, latestPromptId,
       taskForm, datasetFields, judgePromptMappings,
       onEvaluatorChange, currentMappingFields, hasFieldMapping,
       getDatasetFieldDesc, mappingFieldExists,
       handleCreate, handleClearDraft, hasDraft,
-      answerSource, callPromptTemplate, canCreate,
+      answerSource, canCreate,
       evaluatedModels, judgeModels, modeConflictPrompts, providerLabel,
-      evaluatorUsedVars, copyVarName, insertCallVar
+      groupedDatasets, groupedPrompts,
+      previewType, previewData, previewLoading, previewDatasetFields, previewTitle, previewItem
     }
   }
 }
@@ -515,18 +644,31 @@ export default {
 
 <style scoped>
 .task-create-page {
-  background: var(--bg-card);
+  background: #fff;
   border-radius: 14px;
-  padding: 24px;
   border: 1px solid var(--border);
   box-shadow: var(--shadow-card);
   height: 100%;
   display: flex;
   flex-direction: column;
   min-height: 0;
+  overflow: hidden;
 }
-.page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-shrink: 0; }
-.page-header h2 { font-size: 18px; font-weight: 700; color: var(--text-prime); }
+/* 顶部工具栏（与评估器编辑器一致） */
+.topbar { display: flex; align-items: center; justify-content: space-between; padding: 0 20px; height: 54px; flex-shrink: 0; border-bottom: 1px solid #e5e7eb; background: #ffffff; }
+.topbar-left { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+.topbar-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; margin-left: 16px; }
+.back-btn { font-size: 13px; color: var(--text-sec) !important; }
+.topbar-sep { width: 1px; height: 20px; background: #e5e7eb; flex-shrink: 0; }
+.topbar-title { font-size: 15px; font-weight: 600; color: #111827; }
+
+.form-layout {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  gap: 0;
+  padding: 0 20px;
+}
 
 .form-body {
   flex: 1;
@@ -566,83 +708,95 @@ export default {
 .form-row-right {
   flex: 1;
   min-width: 0;
-  max-width: 360px;
+  max-width: 500px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .form-row-right--wide {
   max-width: 700px;
 }
 
-/* 信息提示条 */
-.info-bar {
-  display: flex; align-items: center; gap: 10px;
-  padding: 8px 14px; background: var(--bg-input); border: 1px solid var(--border);
-  border-radius: 8px; margin: -4px 0 12px 170px;
-}
-.info-bar-label { font-size: 12px; font-weight: 600; color: var(--text-prime); flex-shrink: 0; }
-.info-bar-tip { font-size: 12px; color: var(--text-mute); }
-
 .field-desc { color: var(--text-sec); font-size: 12px; }
 .field-desc-empty { color: var(--text-mute); }
 .ph-code { background: rgba(245,158,11,0.1); padding: 2px 8px; border-radius: 3px; color: #f59e0b; font-family: Menlo, monospace; font-size: 13px; }
 
-.form-footer {
-  display: flex; justify-content: center; padding: 28px 0 8px; flex-shrink: 0;
-}
 
-/* 可用变量面板 */
-.var-panel {
-  margin: 14px 0; border: 1px solid var(--border); border-radius: 10px;
-  background: var(--bg-input); overflow: hidden;
+/* ===== 右侧预览面板 ===== */
+.preview-panel {
+  width: 340px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  margin-left: 20px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
-.var-panel-head {
-  display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+.preview-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
   border-bottom: 1px solid var(--border);
-  background: linear-gradient(135deg, rgba(24,144,255,0.06), rgba(102,107,210,0.04));
+  flex-shrink: 0;
 }
-.var-panel-title {
-  font-size: 13px; font-weight: 600; color: var(--accent);
-  display: flex; align-items: center; gap: 4px; white-space: nowrap;
+.preview-title { font-size: 14px; font-weight: 600; color: var(--text-prime); }
+.preview-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
 }
-.var-panel-tip { font-size: 12px; color: var(--text-mute); line-height: 1.5; }
-.var-panel-tip code {
-  background: rgba(24,144,255,0.1); color: var(--accent);
-  padding: 1px 5px; border-radius: 3px; font-size: 11px; font-family: Menlo, monospace;
+.preview-section { margin-bottom: 18px; }
+.preview-section-title {
+  font-size: 12px; font-weight: 600; color: var(--text-sec);
+  margin-bottom: 8px; padding-bottom: 4px; border-bottom: 1px solid var(--border);
 }
-.var-panel-body { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 14px; }
-.var-chip {
-  display: inline-flex; align-items: center; gap: 4px; padding: 5px 10px;
-  border: 1px solid var(--border); border-radius: 6px; background: var(--bg-card);
-  cursor: pointer; transition: all 0.15s; font-size: 12px;
+.preview-kv {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 5px 0;
+  font-size: 13px;
 }
-.var-chip:hover { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
-.var-chip:active { transform: scale(0.96); }
-.var-chip.var-used { border-color: var(--accent); background: rgba(24,144,255,0.08); }
-.var-chip.var-builtin { border-style: dashed; opacity: 0.75; cursor: default; }
-.var-chip-name { font-family: Menlo, monospace; font-weight: 600; color: var(--text-prime); }
-.var-chip-role {
-  font-size: 10px; padding: 1px 4px; border-radius: 3px;
-  background: rgba(24,144,255,0.1); color: var(--accent); font-weight: 600; letter-spacing: 0.3px;
-}
-.var-chip-copy { color: var(--text-mute); opacity: 0; transition: opacity 0.15s; }
-.var-chip:hover .var-chip-copy { opacity: 1; }
+.preview-k { color: var(--text-mute); flex-shrink: 0; margin-right: 12px; }
+.preview-v { color: var(--text-prime); text-align: right; word-break: break-all; }
 
-.var-panel-foot {
-  padding: 8px 14px; border-top: 1px solid var(--border); font-size: 12px;
-  color: var(--text-sec); display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+.preview-field-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
 }
-.var-panel-foot--warn { color: #e6a23c; }
-.var-used-label { color: var(--text-mute); white-space: nowrap; }
-.var-used-tag {
-  background: rgba(24,144,255,0.1); color: var(--accent);
-  padding: 1px 6px; border-radius: 3px; font-size: 11px; font-family: Menlo, monospace;
+.preview-field-row:last-child { border-bottom: none; }
+.preview-field-name { font-family: Menlo, monospace; font-weight: 600; color: var(--text-prime); }
+.preview-field-type { color: var(--text-mute); font-size: 11px; }
+.preview-field-desc { color: var(--text-sec); font-size: 11px; margin-left: auto; }
+
+.preview-pre {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-family: Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-prime);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 300px;
+  overflow-y: auto;
 }
 
-.call-prompt-vars { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; align-items: center; }
-.call-prompt-vars-label { font-size: 12px; color: var(--text-mute); white-space: nowrap; }
-.call-prompt-var {
-  font-size: 11px; font-family: Menlo, monospace; padding: 2px 7px; border-radius: 4px;
-  background: rgba(24,144,255,0.08); color: var(--accent); cursor: pointer;
-  border: 1px solid transparent; transition: all 0.15s;
+/* 预览面板过渡动画 */
+.preview-slide-enter-active, .preview-slide-leave-active {
+  transition: all 0.25s ease;
 }
-.call-prompt-var:hover { background: rgba(24,144,255,0.18); border-color: var(--accent); }
+.preview-slide-enter-from, .preview-slide-leave-to {
+  width: 0;
+  opacity: 0;
+  margin-left: 0;
+  padding: 0;
+}
 </style>

@@ -3,9 +3,11 @@ package com.eval.service.impl;
 import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.eval.common.auth.AuthContext;
 import com.eval.common.exception.BusinessException;
 import com.eval.common.result.PageResult;
 import com.eval.common.util.EncryptUtil;
+import com.eval.common.util.OwnershipUtil;
 import com.eval.dao.mapper.EvalModelConfigMapper;
 import com.eval.model.dto.ModelConfigDTO;
 import com.eval.model.entity.EvalModelConfig;
@@ -28,7 +30,7 @@ public class ModelConfigServiceImpl implements ModelConfigService {
     private final EncryptUtil encryptUtil;
 
     @Override
-    public EvalModelConfig add(ModelConfigDTO dto) {
+    public EvalModelConfig add(ModelConfigDTO dto, Long createdBy) {
         EvalModelConfig config = new EvalModelConfig();
         config.setName(dto.getName());
         config.setProvider(dto.getProvider());
@@ -39,6 +41,7 @@ public class ModelConfigServiceImpl implements ModelConfigService {
         config.setTemperature(dto.getTemperature() != null ? BigDecimal.valueOf(dto.getTemperature()) : BigDecimal.valueOf(0.7));
         config.setMaxTokens(dto.getMaxTokens() != null ? dto.getMaxTokens() : 2048);
         config.setStatus(1);
+        config.setCreatedBy(createdBy);
         config.setCreatedAt(LocalDateTime.now());
         modelConfigMapper.insert(config);
         log.info("模型配置添加成功: id={}, name={}", config.getId(), config.getName());
@@ -46,11 +49,18 @@ public class ModelConfigServiceImpl implements ModelConfigService {
     }
 
     @Override
-    public PageResult<EvalModelConfig> list(int page, int size) {
+    public PageResult<EvalModelConfig> list(int page, int size, String modelType, Integer status) {
         Page<EvalModelConfig> pageObj = new Page<>(page, size);
-        Page<EvalModelConfig> result = modelConfigMapper.selectPage(pageObj,
-                new LambdaQueryWrapper<EvalModelConfig>().orderByDesc(EvalModelConfig::getCreatedAt));
-        // 列表返回时对 apiKey 脱敏（不暴露明文）
+        LambdaQueryWrapper<EvalModelConfig> wrapper = new LambdaQueryWrapper<>();
+        if (StrUtil.isNotBlank(modelType)) {
+            wrapper.and(w -> w.eq(EvalModelConfig::getModelType, modelType)
+                              .or().eq(EvalModelConfig::getModelType, "both"));
+        }
+        if (status != null) {
+            wrapper.eq(EvalModelConfig::getStatus, status);
+        }
+        wrapper.orderByDesc(EvalModelConfig::getCreatedAt);
+        Page<EvalModelConfig> result = modelConfigMapper.selectPage(pageObj, wrapper);
         result.getRecords().forEach(m -> m.setApiKey(encryptUtil.mask(m.getApiKey())));
         return new PageResult<>(result.getRecords(), result.getTotal(), page, size);
     }
@@ -88,7 +98,10 @@ public class ModelConfigServiceImpl implements ModelConfigService {
     }
 
     @Override
-    public void deleteById(Long id) {
+    public void deleteById(Long id, AuthContext ctx) {
+        EvalModelConfig config = modelConfigMapper.selectById(id);
+        if (config == null) throw new BusinessException("模型配置不存在");
+        OwnershipUtil.assertCanDelete(config.getCreatedBy(), ctx, "模型");
         modelConfigMapper.deleteById(id);
         log.info("模型配置删除: id={}", id);
     }

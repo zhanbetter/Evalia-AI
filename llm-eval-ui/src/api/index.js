@@ -18,13 +18,18 @@ export const datasetApi = {
   detectDuplicates: (id, fieldName, threshold) => request.post(`/datasets/${id}/detect-duplicates`, null, { params: { fieldName, threshold } }),
   batchDeleteItems: (id, itemIds) => request.post(`/datasets/${id}/items/batch-delete`, itemIds),
   listVersions: (name) => request.get('/datasets/versions', { params: { name } }),
-  listEvalHistory: (id) => request.get(`/datasets/${id}/eval-history`)
+  checkName: (name, excludeId, excludeName, targetVersion) => request.get('/datasets/check-name', { params: { name, excludeId, excludeName, targetVersion } }),
+  listEvalHistory: (id) => request.get(`/datasets/${id}/eval-history`),
+  goldAnnotate: (id, data) => request.post(`/datasets/${id}/gold-annotations/annotate`, data),
+  goldList: (id, page = 1, size = 20) => request.get(`/datasets/${id}/gold-annotations`, { params: { page, size } }),
+  goldStats: (id) => request.get(`/datasets/${id}/gold-annotations/stats`),
+  goldRemove: (id, itemId, annotator) => request.delete(`/datasets/${id}/gold-annotations/${itemId}`, { params: { annotator } })
 }
 
 // 模型 API
 export const modelApi = {
   add: (data) => request.post('/models', data),
-  list: (page = 1, size = 10) => request.get('/models', { params: { page, size } }),
+  list: (page = 1, size = 10, modelType, status) => request.get('/models', { params: { page, size, modelType, status } }),
   update: (id, data) => request.put(`/models/${id}`, data),
   delete: (id) => request.delete(`/models/${id}`),
   testConnection: (id) => request.post(`/models/${id}/test`)
@@ -33,6 +38,7 @@ export const modelApi = {
 // 评测Prompt API
 export const promptApi = {
   add: (data) => request.post('/prompts', data),
+  checkName: (name, excludeId) => request.get('/prompts/check-name', { params: { name, excludeId } }),
   list: (page = 1, size = 100) => request.get('/prompts', { params: { page, size } }),
   update: (id, data) => request.put(`/prompts/${id}`, data),
   delete: (id) => request.delete(`/prompts/${id}`),
@@ -64,6 +70,7 @@ export const resultApi = {
   getSummary: (taskId) => request.get(`/results/${taskId}/summary`),
   listBadcases: (taskId, params) => request.get(`/results/${taskId}/badcases`, { params }),
   listJudgeResults: (taskId, params) => request.get(`/results/${taskId}/judge-results`, { params }),
+  listDimensionResults: (taskId, params) => request.get(`/results/${taskId}/dimension-results`, { params }),
   // 人工校验
   submitHumanReview: (data) => request.post('/results/human-review', data),
   getHumanReviewStats: (taskId, params) => request.get(`/results/${taskId}/human-review/stats`, { params }),
@@ -79,10 +86,37 @@ export const resultApi = {
 // 报告 API
 export const reportApi = {
   preview: (taskId) => request.get(`/reports/${taskId}/preview`),
-  downloadUrl: (taskId) => `/api/reports/${taskId}/download`
+  download: async (taskId) => {
+    const token = localStorage.getItem('eval-token')
+    const response = await fetch(`/api/reports/${taskId}/download`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+    if (!response.ok) throw new Error('下载失败')
+    const blob = await response.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `eval_report_${taskId}.html`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
 }
 
 // Playground API
 export const playgroundApi = {
   run: (data) => request.post('/playground/run', data)
+}
+
+// 异步任务 API（耗时操作改为异步提交+轮询）
+export const asyncJobApi = {
+  get: (id) => request.get(`/async-jobs/${id}`),
+  getResult: (id) => request.get(`/async-jobs/${id}/result`)
+}
+
+// 登录/注册/鉴权 API
+export const authApi = {
+  login: (data) => request.post('/auth/login', data),
+  register: (data) => request.post('/auth/register', data),
+  me: () => request.get('/auth/me'),
+  logout: () => request.post('/auth/logout')
 }

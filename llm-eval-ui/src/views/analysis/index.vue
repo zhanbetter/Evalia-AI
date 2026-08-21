@@ -1,5 +1,9 @@
 <template>
-  <div class="page analysis-page">
+  <div class="analysis-page">
+    <!-- 页面标题 -->
+    <div class="page-header">
+      <h2>结果分析</h2>
+    </div>
     <!-- 顶部工具栏：共享任务上下文 + 版本对比 -->
     <div class="toolbar">
       <div class="toolbar-left">
@@ -24,11 +28,10 @@
           {{ statusLabel(currentTask.status) }}
         </span>
         <span class="task-meta" v-if="currentTask">
-          版本 v{{ currentTask.version }} · 评估器：{{ promptNames }}
+          版本 v{{ currentTask.version }}
         </span>
       </div>
       <div class="toolbar-right">
-        <!-- 版本对比选择器 -->
         <div class="compare-selector" v-if="tasks.length">
           <span class="compare-label">对比：</span>
           <el-select v-model="compareTaskId" placeholder="选对比版本" clearable size="small" style="width: 180px"
@@ -49,23 +52,21 @@
     <el-empty v-if="!selectedTaskId" description="请选择评测任务查看结果分析" />
 
     <template v-if="selectedTaskId">
-      <!-- 三视图 Tab -->
       <el-tabs v-model="activeView" class="analysis-tabs" @tab-change="onTabChange">
         <el-tab-pane name="overview">
           <template #label><span class="tab-label"><el-icon :size="14"><DataLine /></el-icon> 概览</span></template>
           <overview-tab :task-id="selectedTaskId" :compare-task-id="compareTaskId"
             :model-map="modelMap" :prompt-map="promptMap" @go-badcase="goBadcase" />
         </el-tab-pane>
+        <el-tab-pane name="all">
+          <template #label><span class="tab-label"><el-icon :size="14"><List /></el-icon> 全部结果</span></template>
+          <all-results-tab :task-id="selectedTaskId" :models="models"
+            :model-map="modelMap" />
+        </el-tab-pane>
         <el-tab-pane name="cases">
           <template #label><span class="tab-label"><el-icon :size="14"><Warning /></el-icon> 失败案例</span></template>
           <cases-tab :task-id="selectedTaskId" :models="models" :prompts="prompts"
-            :model-map="modelMap" :prompt-map="promptMap" :initial-dimension="pendingDim"
-            @go-review="goReview" />
-        </el-tab-pane>
-        <el-tab-pane name="review">
-          <template #label><span class="tab-label"><el-icon :size="14"><EditPen /></el-icon> 人工校验</span></template>
-          <review-tab :task-id="selectedTaskId" :models="models" :prompts="prompts"
-            :model-map="modelMap" :prompt-map="promptMap" :focus-sample="focusSample" />
+            :model-map="modelMap" :prompt-map="promptMap" :initial-dimension="pendingDim" />
         </el-tab-pane>
       </el-tabs>
     </template>
@@ -73,16 +74,17 @@
 </template>
 
 <script>
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
-import { taskApi, modelApi, promptApi } from '../../api'
+import { ElMessage } from 'element-plus'
+import { taskApi, modelApi, promptApi, reportApi } from '../../api'
 import OverviewTab from './OverviewTab.vue'
 import CasesTab from './CasesTab.vue'
-import ReviewTab from './ReviewTab.vue'
+import AllResultsTab from './AllResultsTab.vue'
 
 export default {
   name: 'AnalysisPage',
-  components: { OverviewTab, CasesTab, ReviewTab },
+  components: { OverviewTab, CasesTab, AllResultsTab },
   setup() {
     const route = useRoute()
     const tasks = ref([])
@@ -94,10 +96,8 @@ export default {
     const promptMap = ref({})
     const activeView = ref('overview')
     const pendingDim = ref('')
-    const focusSample = ref(null)
 
     const currentTask = computed(() => tasks.value.find(t => t.id === selectedTaskId.value) || null)
-    // 可对比的任务：同一名称的其他版本（排除当前）
     const availableCompareTasks = computed(() => {
       if (!selectedTaskId.value) return []
       const current = currentTask.value
@@ -108,7 +108,6 @@ export default {
         t.status === 'COMPLETED'
       ).sort((a, b) => b.version - a.version)
     })
-    const promptNames = computed(() => '')
     const statusClass = (s) => ({ PENDING: 'pend', RUNNING: 'run', COMPLETED: 'done', FAILED: 'fail', CANCELLED: 'fail' }[s] || 'pend')
     const statusLabel = (s) => ({ PENDING: '待启动', RUNNING: '运行中', COMPLETED: '已完成', FAILED: '失败', CANCELLED: '已取消' }[s] || s)
 
@@ -117,6 +116,10 @@ export default {
       tasks.value = res.data.records
       if (route.query.taskId) {
         selectedTaskId.value = Number(route.query.taskId)
+      } else if (tasks.value.length) {
+        const completed = tasks.value.find(t => t.status === 'COMPLETED')
+        if (completed) selectedTaskId.value = completed.id
+        else selectedTaskId.value = tasks.value[0].id
       }
       if (route.query.view) {
         activeView.value = route.query.view
@@ -126,7 +129,7 @@ export default {
       }
     }
     const loadMaps = async () => {
-      const [modelRes, promptRes] = await Promise.all([modelApi.list(1, 100), promptApi.list()])
+      const [modelRes, promptRes] = await Promise.all([modelApi.list(1, 100, undefined, 1), promptApi.list()])
       models.value = modelRes.data.records
       prompts.value = promptRes.data.records
       modelRes.data.records.forEach(m => { modelMap.value[m.id] = m.name })
@@ -136,12 +139,9 @@ export default {
       selectedTaskId.value = Number(id)
       compareTaskId.value = null
       pendingDim.value = ''
-      focusSample.value = null
       activeView.value = 'overview'
     }
-    const onCompareChange = () => {
-      // 对比任务变化，概览会自行刷新（watch compareTaskId）
-    }
+    const onCompareChange = () => {}
     const onTabChange = () => { pendingDim.value = '' }
 
     const goBadcase = (dim) => {
@@ -149,15 +149,14 @@ export default {
       activeView.value = 'cases'
       nextTick(() => { pendingDim.value = dim })
     }
-    const goReview = (sample) => {
-      focusSample.value = sample
-      activeView.value = 'review'
-      nextTick(() => { focusSample.value = sample })
-    }
 
-    const downloadReport = () => {
+    const downloadReport = async () => {
       if (!selectedTaskId.value) return
-      window.open(`/api/reports/${selectedTaskId.value}/download`, '_blank')
+      try {
+        await reportApi.download(selectedTaskId.value)
+      } catch (e) {
+        ElMessage.error('报告下载失败')
+      }
     }
 
     onMounted(() => { loadTasks(); loadMaps() })
@@ -166,15 +165,42 @@ export default {
       tasks, selectedTaskId, compareTaskId, availableCompareTasks, onCompareChange,
       currentTask, onSelectTask, statusClass, statusLabel,
       models, prompts, modelMap, promptMap, activeView, onTabChange,
-      pendingDim, focusSample, goBadcase, goReview, downloadReport, promptNames
+      pendingDim, goBadcase, downloadReport
     }
   }
 }
 </script>
 
 <style scoped>
-.analysis-page { max-width: 1360px; margin: 0 auto; padding: 24px 20px; font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif; background: var(--bg-root); color: var(--text-prime); line-height: 1.6; }
-.toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; padding: 10px 14px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-sm); }
+.analysis-page {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-card);
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 20px 24px;
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  color: var(--text-prime);
+  line-height: 1.6;
+}
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  flex-shrink: 0;
+}
+.page-header h2 {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-prime);
+  margin: 0;
+}
+.toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; padding: 10px 14px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-sm); flex-shrink: 0; }
 .toolbar-left { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
 .toolbar-right { flex-shrink: 0; display: flex; align-items: center; gap: 8px; }
 .compare-selector { display: flex; align-items: center; gap: 6px; }
@@ -196,7 +222,10 @@ export default {
 .dd-name { font-size: 13px; color: var(--text-prime); }
 .dd-ver { font-size: 11px; color: var(--text-mute); margin-left: 6px; }
 
-.analysis-tabs :deep(.el-tabs__header) { margin-bottom: 16px; }
+.analysis-tabs { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.analysis-tabs :deep(.el-tabs__header) { margin-bottom: 16px; flex-shrink: 0; }
+.analysis-tabs :deep(.el-tabs__content) { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.analysis-tabs :deep(.el-tab-pane) { flex: 1; min-height: 0; overflow-y: auto; }
 .analysis-tabs :deep(.el-tabs__item) { font-size: 14px; }
 .analysis-tabs :deep(.el-tabs__item.is-active) { color: #06b6d4; font-weight: 600; }
 .analysis-tabs :deep(.el-tabs__active-bar) { background-color: #06b6d4; }

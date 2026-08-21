@@ -46,6 +46,13 @@ public class EvalModelConfig implements Serializable {
     /** 启用状态: 1-启用 0-禁用 */
     private Integer status;
 
+    /** 创建者ID（eval_user.id）；null=历史无归属数据（仅管理员可删） */
+    private Long createdBy;
+
+    /** 软删除: 0-正常 1-已删除 */
+    @TableLogic
+    private Integer isDeleted;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdAt;
 }

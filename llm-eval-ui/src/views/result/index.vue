@@ -246,7 +246,8 @@
 <script>
 import { ref, computed, onMounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { taskApi, resultApi, modelApi, promptApi } from '../../api'
+import { ElMessage } from 'element-plus'
+import { taskApi, resultApi, modelApi, promptApi, reportApi } from '../../api'
 // echarts 按需引入，减小首屏体积
 import * as echarts from 'echarts/core'
 import { BarChart } from 'echarts/charts'
@@ -401,7 +402,7 @@ export default {
         allCompareGroups.value = res.data || []
         compareTotal.value = allCompareGroups.value.length
         compareGroups.value = allCompareGroups.value.slice(0, COMPARE_PAGE_SIZE)
-      } catch (e) { /* ignore */ }
+      } catch (e) { ElMessage.warning('加载人机对比数据失败') }
     }
 
     const loadMoreCompare = () => {
@@ -451,9 +452,13 @@ export default {
       router.push({ path: '/badcase', query: { taskId: selectedTaskId.value, dimension: dim } })
     }
 
-    const downloadReport = () => {
+    const downloadReport = async () => {
       if (!selectedTaskId.value) return
-      window.open(`/api/reports/${selectedTaskId.value}/download`, '_blank')
+      try {
+        await reportApi.download(selectedTaskId.value)
+      } catch (e) {
+        ElMessage.error('报告下载失败')
+      }
     }
 
     onMounted(() => { loadTasks(); loadMaps() })

@@ -28,6 +28,9 @@ public interface EvalResultService {
 
     List<BadcaseVO> listJudgeResults(Long taskId, Long promptId, Long modelConfigId);
 
+    /** 维度级别判定记录（每条含 dimension + reason） */
+    List<BadcaseVO> listDimensionResults(Long taskId, Long modelConfigId);
+
     String generateReport(Long taskId);
 
     // ===== 链路一：人工标注（普通评委 + 专家裁决 → 金标准） =====

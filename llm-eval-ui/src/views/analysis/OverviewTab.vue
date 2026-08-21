@@ -3,11 +3,16 @@
     <div v-if="loadingData" v-loading="true" style="height: 200px"></div>
     <template v-if="!loadingData">
       <!-- KPI 大卡片行 -->
-      <div class="kpi-row">
-        <div class="kpi t"><div class="num">{{ overall.totalCount || 0 }}</div><div class="label">总评测条数</div></div>
+      <div class="kpi-row kpi-4">
+        <template v-if="modelCount <= 1">
+          <div class="kpi t"><div class="num">{{ overall.totalCount || 0 }}</div><div class="label">总评测条数</div></div>
+        </template>
         <div class="kpi g"><div class="num">{{ overall.goodCount || 0 }}</div><div class="label">Goodcase（{{ overall.goodRate || 0 }}%）</div></div>
         <div class="kpi b"><div class="num">{{ overall.badcaseCount || 0 }}</div><div class="label">Badcase（{{ overall.badcaseRate || 0 }}%）</div></div>
-        <div class="kpi r"><div class="num">{{ overall.badcaseRate || 0 }}%</div><div class="label">整体 Badcase 率</div></div>
+        <div class="kpi u"><div class="num">{{ overall.unknownCount || 0 }}</div><div class="label">Unknown（{{ overall.unknownRate || 0 }}%）</div></div>
+        <template v-if="modelCount > 1">
+          <div class="kpi m"><div class="num">{{ modelCount }}</div><div class="label">评测模型数</div></div>
+        </template>
       </div>
 
       <!-- 版本对比趋势 -->
@@ -85,14 +90,67 @@
         </div>
       </div>
 
+      <!-- 评分分布 -->
+      <div class="section" v-if="judgeResults.length">
+        <div class="sec-hd"><h2>评分分布</h2></div>
+        <div class="sec-bd"><div ref="distChartRef" style="width: 100%; height: 240px;"></div></div>
+      </div>
+
+      <!-- 维度评分构成 -->
+      <div class="section" v-if="dimNames.length">
+        <div class="sec-hd"><h2>维度评分构成</h2></div>
+        <div class="sec-bd"><div ref="stackBarRef" style="width: 100%; height: 200px;"></div></div>
+      </div>
+
       <!-- 模型对比柱状图 -->
-      <div class="section" v-if="summaries.length">
-        <div class="sec-hd"><h2>Badcase 率模型对比</h2></div>
+      <!-- Badcase 率模型对比（多模型时才展示） -->
+      <div class="section" v-if="summaries.length && modelCount > 1">
+        <div class="sec-hd">
+          <h2>Badcase 率模型对比</h2>
+          <el-button size="small" text type="primary" @click="exportCsv" style="margin-left: auto;">
+            <el-icon style="margin-right:4px"><Download /></el-icon>导出 CSV
+          </el-button>
+        </div>
         <div class="sec-bd"><div ref="barRef" style="width: 100%; height: 380px;"></div></div>
       </div>
 
-      <!-- 同题多模型回答对比 -->
-      <div class="section" v-if="compareGroups.length">
+      <!-- 模型×维度热力图 -->
+      <div class="section" v-if="modelCount > 1 && dimNames.length">
+        <div class="sec-hd"><h2>模型 × 维度 Badcase 率</h2></div>
+        <div class="sec-bd"><div ref="heatmapRef" style="width: 100%; height: 280px;"></div></div>
+      </div>
+
+      <!-- 模型 × 维度明细表 -->
+      <div class="section" v-if="modelDimTableRows.length">
+        <div class="sec-hd"><h2>模型 × 维度明细</h2></div>
+        <div class="sec-bd">
+          <table class="md-table">
+            <thead>
+              <tr>
+                <th>模型</th>
+                <th v-for="d in dimNames" :key="d">{{ d }}</th>
+                <th>整体 Badcase 率</th>
+                <th>总条数</th>
+                <th>Badcase 数</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in modelDimTableRows" :key="row.model">
+                <td class="md-model">{{ row.model }}</td>
+                <td v-for="d in dimNames" :key="d" :class="mdCellClass(row.dimRates[d])">
+                  {{ row.dimRates[d] !== undefined ? row.dimRates[d] + '%' : '-' }}
+                </td>
+                <td :class="mdCellClass(row.overallRate)">{{ row.overallRate }}%</td>
+                <td>{{ row.total }}</td>
+                <td>{{ row.bad }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- 同题多模型回答对比（仅在选择对比版本时展示） -->
+      <div class="section" v-if="compareTaskId && compareGroups.length">
         <div class="sec-hd">
           <h2>同题模型回答对比</h2>
           <span class="sec-tip">同一问题下各模型的回答与 AI 判定并列展示</span>
@@ -124,14 +182,15 @@
 </template>
 
 <script>
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
+import { ElMessage } from 'element-plus'
 import { resultApi } from '../../api'
 // echarts 按需引入
 import * as echarts from 'echarts/core'
-import { BarChart } from 'echarts/charts'
-import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
+import { BarChart, HeatmapChart } from 'echarts/charts'
+import { GridComponent, TooltipComponent, LegendComponent, VisualMapComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
-echarts.use([BarChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
+echarts.use([BarChart, HeatmapChart, GridComponent, TooltipComponent, LegendComponent, VisualMapComponent, CanvasRenderer])
 
 export default {
   name: 'OverviewTab',
@@ -140,6 +199,13 @@ export default {
   },
   setup(props, { emit }) {
     const barRef = ref(null)
+    const distChartRef = ref(null)
+    const stackBarRef = ref(null)
+    const heatmapRef = ref(null)
+    let barChart = null
+    let distChart = null
+    let stackBarChart = null
+    let heatmapChart = null
     const summaries = ref([])
     const compareSummaries = ref([])
     const judgeResults = ref([])
@@ -150,15 +216,22 @@ export default {
     const COMPARE_PAGE_SIZE = 5
 
     const modelNames = computed(() => [...new Set(summaries.value.map(s => props.modelMap[s.modelConfigId] || `模型${s.modelConfigId}`))])
+    const modelCount = computed(() => new Set(summaries.value.map(s => s.modelConfigId)).size)
 
     const overallRows = computed(() => summaries.value.filter(s => !s.dimension))
     const overall = computed(() => {
       const rows = overallRows.value
-      if (!rows.length) return { totalCount: 0, badcaseCount: 0, badcaseRate: 0, goodCount: 0, goodRate: 0 }
+      if (!rows.length) return { totalCount: 0, badcaseCount: 0, badcaseRate: 0, goodCount: 0, goodRate: 0, unknownCount: 0, unknownRate: 0 }
       const total = rows.reduce((a, s) => a + (s.totalCount || 0), 0)
       const bad = rows.reduce((a, s) => a + (s.badcaseCount || 0), 0)
+      const good = rows.reduce((a, s) => a + (s.goodCount || 0), 0)
+      const unk = rows.reduce((a, s) => a + (s.unknownCount || 0), 0)
       const rate = total > 0 ? +(bad * 100 / total).toFixed(1) : 0
-      return { totalCount: total, badcaseCount: bad, badcaseRate: rate, goodCount: total - bad, goodRate: (total ? ((total - bad) * 100 / total).toFixed(1) : 0) }
+      return {
+        totalCount: total, badcaseCount: bad, badcaseRate: rate,
+        goodCount: good, goodRate: total ? +(good * 100 / total).toFixed(1) : 0,
+        unknownCount: unk, unknownRate: total ? +(unk * 100 / total).toFixed(1) : 0
+      }
     })
 
     // ===== 版本对比 =====
@@ -197,6 +270,55 @@ export default {
     const getDimClass = (rate) => rate > 30 ? 'bad-t' : rate > 15 ? 'warn' : 'best'
     const getModelName = (id) => props.modelMap[id] || `模型${id}`
 
+    // ===== 模型 × 维度明细表 =====
+    const dimNames = computed(() => [...new Set(summaries.value.filter(s => s.dimension).map(s => s.dimension))].sort())
+    const modelDimTableRows = computed(() => {
+      const dimS = summaries.value.filter(s => s.dimension)
+      const overallS = summaries.value.filter(s => !s.dimension)
+      const modelIds = [...new Set(summaries.value.map(s => s.modelConfigId))]
+      return modelIds.map(mid => {
+        const dimRates = {}
+        dimNames.value.forEach(d => {
+          const found = dimS.find(s => s.modelConfigId === mid && s.dimension === d)
+          dimRates[d] = found ? +found.badcaseRate : undefined
+        })
+        const ov = overallS.find(s => s.modelConfigId === mid)
+        return {
+          model: getModelName(mid),
+          dimRates,
+          overallRate: ov ? +ov.badcaseRate : 0,
+          total: ov ? ov.totalCount : 0,
+          bad: ov ? ov.badcaseCount : 0
+        }
+      }).sort((a, b) => b.overallRate - a.overallRate)
+    })
+    const mdCellClass = (val) => {
+      if (val === undefined) return ''
+      if (val >= 30) return 'cell-bad'
+      if (val >= 15) return 'cell-warn'
+      return 'cell-good'
+    }
+
+    // ===== CSV 导出 =====
+    const exportCsv = () => {
+      const dims = dimNames.value
+      const headers = ['模型', ...dims, '整体 Badcase 率(%)', '总条数', 'Badcase 数']
+      const rows = modelDimTableRows.value.map(r => [
+        r.model,
+        ...dims.map(d => r.dimRates[d] !== undefined ? r.dimRates[d] : ''),
+        r.overallRate, r.total, r.bad
+      ])
+      const csvContent = [headers, ...rows].map(row => row.map(v => `"${v}"`).join(',')).join('\n')
+      const bom = '﻿'
+      const blob = new Blob([bom + csvContent], { type: 'text/csv;charset=utf-8;' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `评测报告_${new Date().toISOString().slice(0,10)}.csv`
+      a.click()
+      URL.revokeObjectURL(url)
+    }
+
     const loadData = async () => {
       if (!props.taskId) return
       loadingData.value = true
@@ -207,10 +329,17 @@ export default {
         ])
         summaries.value = summaryRes.data || []
         judgeResults.value = judgeRes.data || []
-        loadCompareData()
         loadCompareTaskData()
+        if (props.compareTaskId) loadCompareData()
         await nextTick()
-        renderBar()
+        try { renderDistChart() } catch (e) { console.warn('renderDistChart error', e) }
+        try { renderStackBar() } catch (e) { console.warn('renderStackBar error', e) }
+        if (modelCount.value > 1) {
+          try { renderBar() } catch (e) { console.warn('renderBar error', e) }
+          try { renderHeatmap() } catch (e) { console.warn('renderHeatmap error', e) }
+        }
+      } catch (e) {
+        console.error('loadData error', e)
       } finally { loadingData.value = false }
     }
 
@@ -239,7 +368,8 @@ export default {
 
     const renderBar = () => {
       if (!barRef.value) return
-      const chart = echarts.init(barRef.value)
+      if (barChart) { barChart.dispose() }
+      barChart = echarts.init(barRef.value)
       const dimS = summaries.value.filter(s => s.dimension != null)
       const overallS = summaries.value.filter(s => s.dimension == null)
       const dimNames = [...new Set(dimS.map(s => s.dimension))]
@@ -257,7 +387,7 @@ export default {
           return found ? found.badcaseRate : 0
         })
       }))
-      chart.setOption({
+      barChart.setOption({
         tooltip: { trigger: 'axis', formatter: (params) => { let s = params[0].axisValue + '<br/>'; params.forEach(p => { s += `${p.marker} ${p.seriesName}: ${p.value}%<br/>` }); return s } },
         legend: { data: mNames, top: 0 },
         grid: { top: 40, left: 50, right: 20, bottom: 30 },
@@ -267,28 +397,154 @@ export default {
       })
     }
 
+    // 评分分布柱状图（Good/Bad/Unknown）
+    const renderDistChart = () => {
+      if (!distChartRef.value) return
+      if (distChart) { distChart.dispose() }
+      distChart = echarts.init(distChartRef.value)
+      const good = judgeResults.value.filter(r => r.isBadcase === 0).length
+      const bad = judgeResults.value.filter(r => r.isBadcase === 1).length
+      const unk = judgeResults.value.filter(r => r.isBadcase === null || r.isBadcase === undefined).length
+      distChart.setOption({
+        tooltip: { trigger: 'axis' },
+        grid: { top: 20, left: 50, right: 20, bottom: 30 },
+        xAxis: { type: 'category', data: ['Goodcase', 'Badcase', 'Unknown'] },
+        yAxis: { type: 'value', name: '数量' },
+        series: [{
+          type: 'bar', barMaxWidth: 60,
+          data: [
+            { value: good, itemStyle: { color: '#10b981', borderRadius: [6, 6, 0, 0] } },
+            { value: bad, itemStyle: { color: '#ef4444', borderRadius: [6, 6, 0, 0] } },
+            { value: unk, itemStyle: { color: '#94a3b8', borderRadius: [6, 6, 0, 0] } }
+          ]
+        }]
+      })
+    }
+
+    // 维度评分构成堆叠条形图
+    const renderStackBar = () => {
+      if (!stackBarRef.value) return
+      if (stackBarChart) { stackBarChart.dispose() }
+      stackBarChart = echarts.init(stackBarRef.value)
+      const dims = dimNames.value
+      if (!dims.length) {
+        stackBarChart.setOption({ title: { text: '暂无数据', left: 'center', top: 'center', textStyle: { color: '#94a3b8', fontSize: 13 } } })
+        return
+      }
+      const dimS = summaries.value.filter(s => s.dimension)
+      const goodData = [], badData = [], unkData = []
+      dims.forEach(d => {
+        const rows = dimS.filter(s => s.dimension === d)
+        const total = rows.reduce((a, s) => a + (s.totalCount || 0), 0)
+        const good = rows.reduce((a, s) => a + (s.goodCount || 0), 0)
+        const bad = rows.reduce((a, s) => a + (s.badcaseCount || 0), 0)
+        const unk = rows.reduce((a, s) => a + (s.unknownCount || 0), 0)
+        goodData.push(total ? +(good * 100 / total).toFixed(1) : 0)
+        badData.push(total ? +(bad * 100 / total).toFixed(1) : 0)
+        unkData.push(total ? +(unk * 100 / total).toFixed(1) : 0)
+      })
+      stackBarChart.setOption({
+        tooltip: { trigger: 'axis', formatter: (params) => {
+          let s = params[0].axisValue + '<br/>'
+          params.forEach(p => { s += `${p.marker} ${p.seriesName}: ${p.value}%<br/>` })
+          return s
+        }},
+        legend: { data: ['Goodcase', 'Badcase', 'Unknown'], top: 0 },
+        grid: { top: 30, left: 50, right: 20, bottom: 10 },
+        xAxis: { type: 'value', max: 100, axisLabel: { formatter: '{value}%' } },
+        yAxis: { type: 'category', data: dims },
+        series: [
+          { name: 'Goodcase', type: 'bar', stack: 'total', data: goodData, itemStyle: { color: '#10b981' } },
+          { name: 'Badcase', type: 'bar', stack: 'total', data: badData, itemStyle: { color: '#ef4444' } },
+          { name: 'Unknown', type: 'bar', stack: 'total', data: unkData, itemStyle: { color: '#94a3b8' } }
+        ]
+      })
+    }
+
+    // 模型×维度 Badcase 热力图
+    const renderHeatmap = () => {
+      if (!heatmapRef.value) return
+      if (heatmapChart) { heatmapChart.dispose() }
+      heatmapChart = echarts.init(heatmapRef.value)
+      const dims = dimNames.value
+      const rows = modelDimTableRows.value
+      if (!dims.length || !rows.length) {
+        heatmapChart.setOption({ title: { text: '暂无数据', left: 'center', top: 'center', textStyle: { color: '#94a3b8', fontSize: 13 } } })
+        return
+      }
+      const data = []
+      rows.forEach((row, yi) => {
+        dims.forEach((d, xi) => {
+          const val = row.dimRates[d]
+          if (val !== undefined) data.push([xi, yi, val])
+        })
+      })
+      heatmapChart.setOption({
+        tooltip: {
+          formatter: (p) => `${rows[p.value[1]].model} · ${dims[p.value[0]]}<br/>Badcase率: ${p.value[2]}%`
+        },
+        grid: { top: 10, left: 80, right: 40, bottom: 30 },
+        xAxis: { type: 'category', data: dims, splitArea: { show: true } },
+        yAxis: { type: 'category', data: rows.map(r => r.model), splitArea: { show: true } },
+        visualMap: {
+          min: 0, max: 50, calculable: true,
+          orient: 'horizontal', left: 'center', bottom: 0,
+          inRange: { color: ['#d1fae5', '#fef3c7', '#fecaca', '#ef4444'] },
+          textStyle: { fontSize: 11 }
+        },
+        series: [{
+          type: 'heatmap', data,
+          label: { show: true, fontSize: 11, formatter: (p) => p.value[2] + '%' },
+          emphasis: { itemStyle: { shadowBlur: 6, shadowColor: 'rgba(0,0,0,0.3)' } }
+        }]
+      })
+    }
+
     const goBadcase = (dim) => emit('go-badcase', dim)
 
     watch(() => props.taskId, () => { if (props.taskId) loadData() }, { immediate: true })
-    watch(() => props.compareTaskId, () => { loadCompareTaskData() })
+    watch(() => props.compareTaskId, () => {
+      loadCompareTaskData()
+      if (props.compareTaskId) loadCompareData()
+      else { compareGroups.value = []; allCompareGroups.value = []; compareTotal.value = 0 }
+    })
+    watch(modelCount, (cnt) => {
+      if (cnt > 1) { nextTick(() => { renderBar(); renderHeatmap() }) }
+      else {
+        if (barChart) { barChart.dispose(); barChart = null }
+        if (heatmapChart) { heatmapChart.dispose(); heatmapChart = null }
+      }
+    })
+
+    // ECharts resize
+    const allCharts = () => [barChart, distChart, stackBarChart, heatmapChart].filter(Boolean)
+    const handleResize = () => { allCharts().forEach(c => c.resize()) }
+    onBeforeUnmount(() => {
+      allCharts().forEach(c => c.dispose())
+      barChart = null; distChart = null; stackBarChart = null; heatmapChart = null
+      window.removeEventListener('resize', handleResize)
+    })
+    window.addEventListener('resize', handleResize)
 
     return {
-      barRef, summaries, loadingData, overall, dimSummaries, worstDim, bestDim,
-      getDimClass, getModelName, compareGroups, compareTotal, loadMoreCompare, goBadcase,
-      // 版本对比
-      compareOverall, rateDelta, dimCompareRows
+      barRef, distChartRef, stackBarRef, heatmapRef,
+      summaries, judgeResults, loadingData, overall, dimSummaries, worstDim, bestDim,
+      modelCount, getDimClass, getModelName, compareGroups, compareTotal, loadMoreCompare, goBadcase,
+      compareOverall, rateDelta, dimCompareRows,
+      dimNames, modelDimTableRows, mdCellClass, exportCsv
     }
   }
 }
 </script>
 
 <style scoped>
-.kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 20px; }
+.kpi-row { display: grid; gap: 14px; margin-bottom: 20px; }
+.kpi-row.kpi-4 { grid-template-columns: repeat(4, 1fr); }
 .kpi { background: var(--bg-card); border-radius: 12px; padding: 20px 22px; border: 1px solid var(--border); position: relative; overflow: hidden; box-shadow: var(--shadow-sm); }
 .kpi::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; }
-.kpi.t::before { background: var(--accent); } .kpi.g::before { background: var(--accent); } .kpi.b::before { background: var(--red); } .kpi.r::before { background: var(--red); }
+.kpi.t::before { background: var(--accent); } .kpi.g::before { background: #10b981; } .kpi.b::before { background: #ef4444; } .kpi.u::before { background: #94a3b8; } .kpi.m::before { background: #6366f1; }
 .kpi .num { font-size: 30px; font-weight: 800; line-height: 1; margin-bottom: 4px; }
-.kpi.t .num { color: var(--accent); } .kpi.g .num { color: var(--accent); } .kpi.b .num { color: var(--red); } .kpi.r .num { color: var(--red); }
+.kpi.t .num { color: var(--accent); } .kpi.g .num { color: #10b981; } .kpi.b .num { color: #ef4444; } .kpi.u .num { color: #94a3b8; } .kpi.m .num { color: #6366f1; }
 .kpi .label { font-size: 12px; color: var(--text-mute); }
 .section { background: var(--bg-card); border-radius: 12px; border: 1px solid var(--border); margin-bottom: 20px; overflow: hidden; box-shadow: var(--shadow-sm); }
 .sec-hd { padding: 18px 24px 0; display: flex; align-items: center; gap: 8px; }
@@ -354,5 +610,17 @@ export default {
 .cmp-reason-label { display: inline-block; background: var(--bg-input); border-radius: 4px; padding: 0 5px; font-size: 10px; font-weight: 600; color: var(--text-mute); margin-right: 4px; }
 .cmp-latency { font-size: 10px; color: var(--text-mute); margin-top: 4px; }
 .cmp-more { text-align: center; padding: 6px 0; }
-@media (max-width: 900px) { .kpi-row { grid-template-columns: repeat(2, 1fr); } }
+
+/* 模型 × 维度明细表 */
+.md-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.md-table th { background: var(--bg-input); padding: 8px 10px; font-weight: 600; text-align: center; border-bottom: 2px solid var(--border); color: var(--text-sec); font-size: 11px; }
+.md-table th:first-child { text-align: left; }
+.md-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: center; color: var(--text-sec); }
+.md-table td.md-model { text-align: left; font-weight: 600; color: var(--text-prime); }
+.md-table tr:hover td { background: var(--bg-card-hover); }
+.cell-good { color: #10b981; font-weight: 600; }
+.cell-warn { color: #f59e0b; font-weight: 600; }
+.cell-bad { color: #ef4444; font-weight: 600; }
+
+@media (max-width: 900px) { .kpi-row.kpi-4 { grid-template-columns: repeat(2, 1fr); } }
 </style>

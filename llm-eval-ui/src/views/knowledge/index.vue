@@ -49,8 +49,6 @@
 
     <!-- ====== RSS 源管理弹窗 ====== -->
     <el-dialog v-model="showSourceDialog" title="RSS 源管理" width="760px" @open="loadSources">
-      <el-alert type="info" :closable="false" style="margin-bottom: 14px"
-        title="每天 08:30 自动拉取全部启用源（后端可配置 eval.rss.cron 修改）；也可手动点击单源「拉取」或「拉取全部」。仅收录 AI / Agent / 评测相关内容。" />
 
       <!-- 新增订阅源 -->
       <div class="source-add">
@@ -127,7 +125,7 @@
 </template>
 
 <script>
-import axios from 'axios'
+import request from '../../api/request'
 import { ElMessage } from 'element-plus'
 
 export default {
@@ -170,10 +168,10 @@ export default {
         const params = { page, size: this.pageSize }
         if (this.keyword) params.keyword = this.keyword
         if (this.sourceFilter) params.source = this.sourceFilter
-        const { data } = await axios.get('/api/articles', { params })
-        if (data.code === 200) {
-          this.articles = data.data.records || []
-          this.total = data.data.total || 0
+        const res = await request.get('/articles', { params })
+        if (res.code === 200) {
+          this.articles = res.data.records || []
+          this.total = res.data.total || 0
           // 提取来源列表（从当前数据中去重）
           const srcSet = new Set(this.articles.map(a => a.sourceName).filter(Boolean))
           if (srcSet.size > 0) {
@@ -195,9 +193,9 @@ export default {
     async loadSources() {
       this.sourcesLoading = true
       try {
-        const { data } = await axios.get('/api/rss-sources')
-        if (data.code === 200) {
-          this.rssSources = data.data || []
+        const res = await request.get('/rss-sources')
+        if (res.code === 200) {
+          this.rssSources = res.data || []
         }
       } catch (e) {
         ElMessage.error('加载订阅源失败')
@@ -212,13 +210,13 @@ export default {
       }
       this.addingSource = true
       try {
-        const { data } = await axios.post('/api/rss-sources', this.newSource)
-        if (data.code === 200) {
+        const res = await request.post('/rss-sources', this.newSource)
+        if (res.code === 200) {
           ElMessage.success('订阅成功')
           this.newSource = { sourceName: '', feedUrl: '', description: '' }
           this.loadSources()
         } else {
-          ElMessage.error(data.message || '订阅失败')
+          ElMessage.error(res.message || '订阅失败')
         }
       } catch (e) {
         ElMessage.error('订阅失败：' + (e.response?.data?.message || e.message))
@@ -228,7 +226,7 @@ export default {
     },
     async toggleSource(row, enabled) {
       try {
-        await axios.put(`/api/rss-sources/${row.id}/enabled`, { enabled })
+        await request.put(`/rss-sources/${row.id}/enabled`, { enabled })
         row.status = enabled ? 1 : 0
         ElMessage.success(enabled ? '已启用' : '已停用')
       } catch (e) {
@@ -239,8 +237,8 @@ export default {
     },
     async deleteSource(row) {
       try {
-        const { data } = await axios.delete(`/api/rss-sources/${row.id}`)
-        if (data.code === 200) {
+        const res = await request.delete(`/rss-sources/${row.id}`)
+        if (res.code === 200) {
           ElMessage.success('已删除')
           this.rssSources = this.rssSources.filter(s => s.id !== row.id)
         }
@@ -251,13 +249,13 @@ export default {
     async fetchSource(row) {
       this.fetchingSourceId = row.id
       try {
-        const { data } = await axios.post(`/api/rss-sources/${row.id}/fetch`)
-        if (data.code === 200) {
-          ElMessage.success(`「${row.sourceName}」拉取完成，新增 ${data.data} 条`)
+        const res = await request.post(`/rss-sources/${row.id}/fetch`)
+        if (res.code === 200) {
+          ElMessage.success(`「${row.sourceName}」拉取完成，新增 ${res.data} 条`)
           this.loadSources()
           this.loadArticles(1)
         } else {
-          ElMessage.error(data.message || '拉取失败')
+          ElMessage.error(res.message || '拉取失败')
         }
       } catch (e) {
         ElMessage.error('拉取失败：' + (e.response?.data?.message || e.message))
@@ -268,13 +266,13 @@ export default {
     async fetchAllSources() {
       this.fetchingAll = true
       try {
-        const { data } = await axios.post('/api/rss-sources/fetch-all')
-        if (data.code === 200) {
-          ElMessage.success(`全部源拉取完成，共新增 ${data.data} 条`)
+        const res = await request.post('/rss-sources/fetch-all')
+        if (res.code === 200) {
+          ElMessage.success(`全部源拉取完成，共新增 ${res.data} 条`)
           this.loadSources()
           this.loadArticles(1)
         } else {
-          ElMessage.error(data.message || '拉取失败')
+          ElMessage.error(res.message || '拉取失败')
         }
       } catch (e) {
         ElMessage.error('拉取失败：' + (e.response?.data?.message || e.message))
@@ -290,11 +288,11 @@ export default {
       }
       this.importing = true
       try {
-        const { data } = await axios.post('/api/articles/import', null, {
+        const res = await request.post('/articles/import', null, {
           params: { url: this.importForm.url, sourceName: this.importForm.sourceName }
         })
-        if (data.code === 200) {
-          if (data.data) {
+        if (res.code === 200) {
+          if (res.data) {
             ElMessage.success('文章已导入')
             this.showImportDialog = false
             this.importForm = { url: '', sourceName: '' }
@@ -303,7 +301,7 @@ export default {
             ElMessage.warning('导入未成功：可能文章已存在、正文抓取失败，或与评测主题不相关')
           }
         } else {
-          ElMessage.error(data.message || '导入失败')
+          ElMessage.error(res.message || '导入失败')
         }
       } catch (e) {
         ElMessage.error('导入失败：' + (e.response?.data?.message || e.message))

@@ -65,7 +65,7 @@
               <el-icon style="margin-right:3px"><Refresh /></el-icon> 刷新
             </el-button>
             <el-button v-if="t.status === 'COMPLETED'" size="small" type="primary" plain
-              @click="$router.push({ path: '/result', query: { taskId: t.id } })">
+              @click="$router.push({ path: '/analysis', query: { taskId: t.id } })">
               <el-icon style="margin-right:3px"><DataAnalysis /></el-icon> 查看结果
             </el-button>
           </div>
@@ -154,7 +154,7 @@ export default {
           row.status = 'COMPLETED'
         }
       } catch (e) {
-        // ignore
+        console.warn('刷新进度失败', e)
       }
     }
 

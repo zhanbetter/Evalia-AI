@@ -1,10 +1,12 @@
 package com.eval.web.controller;
 
+import com.eval.common.auth.AuthContext;
 import com.eval.common.result.PageResult;
 import com.eval.common.result.Result;
 import com.eval.model.dto.EvalTaskDTO;
 import com.eval.model.entity.EvalTask;
 import com.eval.service.EvalTaskService;
+import com.eval.web.interceptor.AuthInterceptor;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
@@ -21,8 +23,9 @@ public class EvalTaskController {
     private final EvalTaskService evalTaskService;
 
     @PostMapping
-    public Result<EvalTask> create(@Valid @RequestBody EvalTaskDTO dto) {
-        return Result.success(evalTaskService.create(dto));
+    public Result<EvalTask> create(@Valid @RequestBody EvalTaskDTO dto,
+                                   @RequestAttribute(value = AuthInterceptor.AUTH_ATTR) AuthContext ctx) {
+        return Result.success(evalTaskService.create(dto, ctx.getUserId()));
     }
 
     @GetMapping

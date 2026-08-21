@@ -48,6 +48,9 @@ public class EvalTask implements Serializable {
     /** 分片总数（大规模评测拆分后写入，小任务为0） */
     private Integer shardCount;
 
+    /** 创建者ID（eval_user.id）；null=历史无归属数据 */
+    private Long createdBy;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdAt;
 

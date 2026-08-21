@@ -11,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
+import java.util.function.BiConsumer;
 
 /**
  * 数据集重复检测服务
@@ -26,8 +27,8 @@ public class DuplicateDetectionService {
 
     private final EvalDatasetItemMapper datasetItemMapper;
 
-    /** 大数据集分界线 */
-    private static final int LSH_THRESHOLD = 10_000;
+    /** 大数据集分界线：>3000 条时精确 O(n²) 已过慢，改用 MinHash LSH */
+    private static final int LSH_THRESHOLD = 3000;
     /** MinHash 签名长度 */
     private static final int NUM_PERMS = 128;
     /** LSH 分 band 数（b × r = NUM_PERMS） */
@@ -59,6 +60,17 @@ public class DuplicateDetectionService {
     // ======================== 主入口 ========================
 
     public DuplicateDetectionResult detect(Long datasetId, String fieldName, double threshold) {
+        return detect(datasetId, fieldName, threshold, null);
+    }
+
+    /**
+     * 主入口（带进度回调，供异步任务上报进度）
+     *
+     * @param progress 进度回调：参数为 (完成百分比 0-100, 阶段描述)，可为 null（同步场景）
+     */
+    public DuplicateDetectionResult detect(Long datasetId, String fieldName, double threshold,
+                                           BiConsumer<Integer, String> progress) {
+        if (progress != null) progress.accept(5, "正在加载数据...");
         List<EvalDatasetItem> items = datasetItemMapper.selectList(
                 new LambdaQueryWrapper<EvalDatasetItem>()
                         .eq(EvalDatasetItem::getDatasetId, datasetId)
@@ -69,7 +81,10 @@ public class DuplicateDetectionService {
         result.setFieldName(fieldName);
         result.setThreshold(threshold);
 
+        if (progress != null) progress.accept(12, "已加载 " + items.size() + " 条数据");
+
         if (items.size() < 2) {
+            if (progress != null) progress.accept(100, "数据量不足 2 条，无需检测");
             result.setGroups(List.of());
             result.setDuplicateCount(0);
             return result;
@@ -80,16 +95,18 @@ public class DuplicateDetectionService {
         for (int i = 0; i < items.size(); i++) {
             texts[i] = extractField(items.get(i), fieldName);
         }
+        if (progress != null) progress.accept(15, "开始计算相似度...");
 
         // 自适应选择算法
         List<int[]> candidatePairs;
         if (items.size() <= LSH_THRESHOLD) {
             log.info("数据集 {} 条 ≤ {}，使用精确 Jaccard 检测", items.size(), LSH_THRESHOLD);
-            candidatePairs = exactDetect(texts, threshold);
+            candidatePairs = exactDetect(texts, threshold, progress);
         } else {
             log.info("数据集 {} 条 > {}，使用 MinHash LSH 检测", items.size(), LSH_THRESHOLD);
-            candidatePairs = lshDetect(texts, threshold);
+            candidatePairs = lshDetect(texts, threshold, progress);
         }
+        if (progress != null) progress.accept(50, "正在分组重复数据...");
 
         // 并查集分组
         int n = items.size();
@@ -109,6 +126,8 @@ public class DuplicateDetectionService {
 
         // 构建结果
         List<DuplicateGroup> groups = new ArrayList<>();
+        int gDone = 0;
+        int gTotal = (int) groupMap.values().stream().filter(l -> l.size() >= 2).count();
         for (List<Integer> groupIndices : groupMap.values()) {
             if (groupIndices.size() < 2) continue;
 
@@ -149,9 +168,17 @@ public class DuplicateDetectionService {
             group.setItems(groupItems);
             group.setMaxSimilarity(Math.round(maxSim * 100.0) / 100.0);
             groups.add(group);
+
+            if (progress != null) {
+                gDone++;
+                if (gDone % 50 == 0 || gDone == gTotal) {
+                    progress.accept(50 + (int) (30.0 * gDone / gTotal), "正在整理结果 " + gDone + "/" + gTotal + " 组");
+                }
+            }
         }
 
         groups.sort((a, b) -> b.getItems().size() - a.getItems().size());
+        if (progress != null) progress.accept(90, "检测完成，正在汇总...");
 
         result.setGroups(groups);
         result.setDuplicateCount(groups.stream().mapToInt(g -> g.getItems().size()).sum());
@@ -162,14 +189,35 @@ public class DuplicateDetectionService {
 
     // ======================== 精确检测 O(n²) ========================
 
-    private List<int[]> exactDetect(String[] texts, double threshold) {
+    private List<int[]> exactDetect(String[] texts, double threshold, BiConsumer<Integer, String> progress) {
         int n = texts.length;
         List<int[]> pairs = new ArrayList<>();
 
+        // 预计算每条文本的 3-gram 集合与长度：避免 O(n²) 内重复构建集合
+        @SuppressWarnings("unchecked")
+        Set<String>[] gramSets = new HashSet[n];
+        int[] lens = new int[n];
         for (int i = 0; i < n; i++) {
+            gramSets[i] = ngrams(texts[i], 3);
+            lens[i] = texts[i] == null ? 0 : texts[i].length();
+        }
+
+        for (int i = 0; i < n; i++) {
+            if (progress != null && (i % 200 == 0 || i == n - 1)) {
+                progress.accept(15 + (int) (30.0 * i / n), "相似度计算中 " + i + "/" + n);
+            }
+            Set<String> ga = gramSets[i];
+            if (ga.isEmpty()) continue;
             for (int j = i + 1; j < n; j++) {
-                double sim = jaccardSimilarity(texts[i], texts[j]);
-                if (sim >= threshold) {
+                Set<String> gb = gramSets[j];
+                if (gb.isEmpty()) continue;
+                // 长度悬殊的两条文本，3-gram Jaccard 理论最大值 < 阈值，直接跳过
+                int li = lens[i], lj = lens[j];
+                if (li > 2 && lj > 2
+                        && (double) Math.max(li, lj) / Math.min(li, lj) > 1.0 / threshold + 0.05) {
+                    continue;
+                }
+                if (jaccardSets(ga, gb) >= threshold) {
                     pairs.add(new int[]{i, j});
                 }
             }
@@ -186,13 +234,16 @@ public class DuplicateDetectionService {
      * 3. 同桶内任意两条作为候选对
      * 4. 对候选对计算精确 Jaccard 验证
      */
-    private List<int[]> lshDetect(String[] texts, double threshold) {
+    private List<int[]> lshDetect(String[] texts, double threshold, BiConsumer<Integer, String> progress) {
         int n = texts.length;
 
         // 1. 生成 MinHash 签名：signatures[i][k] = 第 i 条文本的第 k 个 hash 值
         long[][] signatures = new long[n][NUM_PERMS];
         for (int i = 0; i < n; i++) {
             signatures[i] = minHashSignature(texts[i]);
+            if (progress != null && (i % 500 == 0 || i == n - 1)) {
+                progress.accept(15 + (int) (15.0 * i / n), "生成签名 " + i + "/" + n);
+            }
         }
 
         // 2. LSH 分桶：对每个 band，将签名片段 hash 成桶 key，同桶内互为候选对
@@ -200,6 +251,9 @@ public class DuplicateDetectionService {
         List<int[]> candidates = new ArrayList<>();
 
         for (int band = 0; band < NUM_BANDS; band++) {
+            if (progress != null) {
+                progress.accept(30 + (int) (10.0 * band / NUM_BANDS), "分桶中 " + (band + 1) + "/" + NUM_BANDS);
+            }
             // band 内：Map<桶hash, 条目索引列表>
             Map<Long, List<Integer>> buckets = new HashMap<>();
             int offset = band * ROWS_PER_BAND;
@@ -228,9 +282,13 @@ public class DuplicateDetectionService {
 
         // 3. 对候选对计算精确 Jaccard 验证
         List<int[]> confirmed = new ArrayList<>();
-        for (int[] pair : candidates) {
-            double sim = jaccardSimilarity(texts[pair[0]], texts[pair[1]]);
-            if (sim >= threshold) {
+        int cTotal = Math.max(candidates.size(), 1);
+        for (int c = 0; c < candidates.size(); c++) {
+            if (progress != null && (c % 1000 == 0 || c == candidates.size() - 1)) {
+                progress.accept(40 + (int) (10.0 * c / cTotal), "验证候选对 " + (c + 1) + "/" + candidates.size());
+            }
+            int[] pair = candidates.get(c);
+            if (jaccardSimilarity(texts[pair[0]], texts[pair[1]]) >= threshold) {
                 confirmed.add(pair);
             }
         }
@@ -312,13 +370,37 @@ public class DuplicateDetectionService {
             case "referenceAnswer" -> normalize(item.getReferenceAnswer());
             case "context" -> normalize(item.getContext());
             case "category" -> normalize(item.getCategory());
-            default -> "";
+            // 其它角色（如 MODEL_RESPONSE 的模型回答）存在 extra_fields JSON 里，按原始列名取值
+            default -> normalize(extraField(item, fieldName));
         };
+    }
+
+    /** 从 extra_fields JSON 中按原始列名提取值（model_response 等自定义/高维字段） */
+    private String extraField(EvalDatasetItem item, String fieldName) {
+        if (item.getExtraFields() == null || item.getExtraFields().isBlank()) return null;
+        try {
+            return cn.hutool.json.JSONUtil.parseObj(item.getExtraFields()).getStr(fieldName);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private String normalize(String text) {
         if (text == null || text.isBlank()) return "";
         return text.trim().toLowerCase().replaceAll("\\s+", " ");
+    }
+
+    /** 基于预构建 gram 集合的 Jaccard（复用已构建的 Set，避免每次比较重复构建） */
+    private double jaccardSets(Set<String> a, Set<String> b) {
+        if (a == b) return 1.0;
+        Set<String> small = a.size() <= b.size() ? a : b;
+        Set<String> large = a.size() <= b.size() ? b : a;
+        int intersection = 0;
+        for (String s : small) {
+            if (large.contains(s)) intersection++;
+        }
+        int union = a.size() + b.size() - intersection;
+        return union == 0 ? 0 : (double) intersection / union;
     }
 
     /** 字符 3-gram Jaccard 相似度（精确计算） */

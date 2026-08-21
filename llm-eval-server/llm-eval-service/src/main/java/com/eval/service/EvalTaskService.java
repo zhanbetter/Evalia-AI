@@ -8,8 +8,9 @@ public interface EvalTaskService {
 
     /**
      * 创建评测任务
+     * @param createdBy 创建者ID（eval_user.id），用于数据归属
      */
-    EvalTask create(EvalTaskDTO dto);
+    EvalTask create(EvalTaskDTO dto, Long createdBy);
 
     /**
      * 任务列表（分页）
@@ -35,4 +36,9 @@ public interface EvalTaskService {
      * 查询进度
      */
     int getProgress(Long id);
+
+    /**
+     * 重试失败分片
+     */
+    void retryFailedShards(Long taskId);
 }

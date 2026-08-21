@@ -1,12 +1,12 @@
 <template>
   <div class="app-root" :class="[theme, { 'nav-collapsed': collapsed }]">
-    <!-- 左侧导航栏 -->
-    <aside class="glass-side">
+    <!-- 左侧导航栏（登录等公开页不展示） -->
+    <aside v-if="!$route.meta.public" class="glass-side">
       <div class="side-brand">
         <div class="brand-icon">
           <el-icon :size="18"><MagicStick /></el-icon>
         </div>
-        <span class="brand-text" v-show="!collapsed">LLM Eval</span>
+        <span class="brand-text" v-show="!collapsed">Evalia-AI 评测平台</span>
       </div>
 
       <nav class="side-nav">
@@ -33,7 +33,7 @@
           </div>
         </router-link>
 
-        <div class="nav-group-label" v-show="!collapsed">评测跟踪</div>
+        <div class="nav-group-label" v-show="!collapsed">评测知识</div>
 
         <router-link v-for="item in navItems.tertiary" :key="item.to" :to="item.to" class="nav-item" v-slot="{ isActive }">
           <div :class="['nav-pill', { active: isActive }]">
@@ -44,6 +44,25 @@
           </div>
         </router-link>
       </nav>
+
+      <div class="side-user">
+        <el-dropdown trigger="click" @command="onUserCommand">
+          <div class="user-chip" :title="user?.nickname || user?.username || '未登录'">
+            <div class="user-avatar">{{ avatarText }}</div>
+            <span class="user-name" v-show="!collapsed">{{ user?.nickname || user?.username || '未登录' }}</span>
+            <span class="user-role-tag" v-if="user && !collapsed" :class="user.role === 'ADMIN' ? 'is-admin' : ''">
+              {{ user.role === 'ADMIN' ? '管理员' : '用户' }}
+            </span>
+          </div>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="logout">
+                <el-icon><SwitchButton /></el-icon>退出登录
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+      </div>
 
       <div class="side-footer">
         <button class="theme-toggle" @click="toggleTheme" :title="theme==='theme-dark'?'切换亮色':'切换暗色'">
@@ -66,12 +85,15 @@
 </template>
 
 <script>
+import { useRouter } from 'vue-router'
+
 export default {
   name: 'App',
   data() {
     return {
       collapsed: false,
       theme: localStorage.getItem('eval-theme') || 'theme-light',
+      user: null,
       navItems: {
         primary: [
           { to: '/dataset', label: '数据集', icon: 'Files', color: '#10b981', grad: 'linear-gradient(135deg,#10b981,#059669)', gradDim: 'rgba(16,185,129,0.12)' },
@@ -80,7 +102,8 @@ export default {
           { to: '/task', label: '任务', icon: 'List', color: '#ec4899', grad: 'linear-gradient(135deg,#ec4899,#db2777)', gradDim: 'rgba(236,72,153,0.12)' }
         ],
         secondary: [
-          { to: '/analysis', label: '结果分析', icon: 'DataAnalysis', color: '#06b6d4', grad: 'linear-gradient(135deg,#06b6d4,#0891b2)', gradDim: 'rgba(6,182,212,0.12)' }
+          { to: '/analysis', label: '结果分析', icon: 'DataAnalysis', color: '#06b6d4', grad: 'linear-gradient(135deg,#06b6d4,#0891b2)', gradDim: 'rgba(6,182,212,0.12)' },
+          { to: '/annotation', label: '人工审核', icon: 'EditPen', color: '#3b82f6', grad: 'linear-gradient(135deg,#3b82f6,#2563eb)', gradDim: 'rgba(59,130,246,0.12)' }
         ],
         tertiary: [
           { to: '/knowledge', label: '评测知识', icon: 'Reading', color: '#8b5cf6', grad: 'linear-gradient(135deg,#8b5cf6,#7c3aed)', gradDim: 'rgba(139,92,246,0.12)' }
@@ -88,7 +111,33 @@ export default {
       }
     }
   },
+  computed: {
+    avatarText() {
+      const u = this.user
+      if (!u) return '?'
+      return (u.nickname || u.username || '?').slice(0, 1).toUpperCase()
+    }
+  },
   methods: {
+    loadUserFromStorage() {
+      try {
+        const raw = localStorage.getItem('eval-user')
+        return raw ? JSON.parse(raw) : null
+      } catch (e) {
+        return null
+      }
+    },
+    refreshUser() {
+      this.user = this.loadUserFromStorage()
+    },
+    onUserCommand(command) {
+      if (command === 'logout') {
+        localStorage.removeItem('eval-token')
+        localStorage.removeItem('eval-user')
+        this.user = null
+        this.$router.replace('/login')
+      }
+    },
     toggleTheme() {
       this.theme = this.theme === 'theme-dark' ? 'theme-light' : 'theme-dark'
       localStorage.setItem('eval-theme', this.theme)
@@ -103,6 +152,15 @@ export default {
   },
   mounted() {
     this.applyTheme()
+    this.refreshUser()
+  },
+  watch: {
+    // 登录/退出后路由变化，刷新侧边栏用户信息
+    '$route'(val) {
+      if (val.path !== '/login') {
+        this.refreshUser()
+      }
+    }
   }
 }
 </script>
@@ -133,6 +191,8 @@ export default {
   --red-soft: rgba(239,68,68,0.08);
   --yellow: #f59e0b;
   --yellow-soft: rgba(245,158,11,0.08);
+  --bg-panel: #f9fafb;
+  --border-light: #d1d5db;
   --brand-gradient: linear-gradient(135deg, #10b981, #059669);
   --side-bg: rgba(255,255,255,0.86);
   --side-border: rgba(0,0,0,0.04);
@@ -162,6 +222,8 @@ export default {
   --red-soft: rgba(248,113,113,0.12);
   --yellow: #fbbf24;
   --yellow-soft: rgba(251,191,36,0.12);
+  --bg-panel: rgba(255,255,255,0.03);
+  --border-light: rgba(255,255,255,0.1);
   --brand-gradient: linear-gradient(135deg, #34d399, #059669);
   --side-bg: rgba(14,23,18,0.92);
   --side-border: rgba(255,255,255,0.06);
@@ -228,11 +290,11 @@ html, body, #app {
   flex-shrink: 0;
 }
 .brand-text {
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 700;
   color: var(--text-prime);
   white-space: nowrap;
-  letter-spacing: -0.5px;
+  letter-spacing: -0.3px;
 }
 
 .side-nav {
@@ -304,6 +366,59 @@ html, body, #app {
 .nav-collapsed .nav-group-label { display: none; }
 .nav-collapsed .nav-pill { justify-content: center; padding: 8px; }
 .nav-collapsed .nav-icon { width: 32px; height: 32px; }
+
+.side-user {
+  padding: 6px 10px 8px;
+  border-top: 1px solid var(--border);
+}
+.user-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+.user-chip:hover {
+  background: var(--accent-soft);
+}
+.user-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--brand-gradient);
+  color: var(--accent-text);
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.user-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-prime);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1;
+}
+.user-role-tag {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 7px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.user-role-tag.is-admin {
+  background: var(--yellow-soft);
+  color: var(--yellow);
+}
+.nav-collapsed .side-user { display: flex; justify-content: center; padding: 6px 0 8px; }
 
 .side-footer {
   padding: 12px 14px;
@@ -515,7 +630,82 @@ html, body, #app {
   background: var(--bg-card-hover);
 }
 .el-table__body tr:hover > td.el-table__cell {
-  background: var(--accent-soft) !important;
+  background: linear-gradient(var(--accent-soft), var(--accent-soft)), var(--bg-card) !important;
+}
+.theme-dark .el-table__body tr:hover > td.el-table__cell {
+  background: linear-gradient(var(--accent-soft), var(--accent-soft)), #0f172a !important;
+}
+
+/* 固定列完全不透明：固定列单元格类名（Element Plus 2.4） */
+/* 亮色：body 单元格用卡片白，斑马纹用浅灰，表头用输入框灰 */
+.el-table-fixed-column--right,
+.el-table-fixed-column--left {
+  background-color: var(--bg-card) !important;
+}
+.el-table__row--striped .el-table-fixed-column--right,
+.el-table__row--striped .el-table-fixed-column--left {
+  background-color: var(--bg-card-hover) !important;
+}
+/* hover 必须用不透明背景：实色底 + 半透明绿色渐变叠层，避免内容透出 */
+.el-table__row:hover .el-table-fixed-column--right,
+.el-table__row:hover .el-table-fixed-column--left {
+  background: linear-gradient(var(--accent-soft), var(--accent-soft)), var(--bg-card) !important;
+}
+.el-table th.el-table-fixed-column--right,
+.el-table th.el-table-fixed-column--left {
+  background-color: var(--bg-input) !important;
+}
+/* 左/右固定列补丁块 */
+.el-table__fixed-right-patch,
+.el-table__fixed-left-patch {
+  background-color: var(--bg-card) !important;
+}
+.el-table__fixed-right,
+.el-table__fixed {
+  background-color: var(--bg-card) !important;
+}
+.el-table__fixed-right td.el-table__cell,
+.el-table__fixed-right th.el-table__cell,
+.el-table__fixed td.el-table__cell,
+.el-table__fixed th.el-table__cell {
+  background-color: var(--bg-card) !important;
+}
+.el-table__fixed-right .el-table__row:hover td.el-table__cell,
+.el-table__fixed .el-table__row:hover td.el-table__cell {
+  background: linear-gradient(var(--accent-soft), var(--accent-soft)), var(--bg-card) !important;
+}
+/* 暗色：纯色兜底（--bg-card 是半透明的） */
+.theme-dark .el-table-fixed-column--right,
+.theme-dark .el-table-fixed-column--left {
+  background-color: #0f172a !important;
+}
+.theme-dark .el-table__row--striped .el-table-fixed-column--right,
+.theme-dark .el-table__row--striped .el-table-fixed-column--left {
+  background-color: #1e293b !important;
+}
+.theme-dark .el-table__row:hover .el-table-fixed-column--right,
+.theme-dark .el-table__row:hover .el-table-fixed-column--left {
+  background: linear-gradient(rgba(52,211,153,0.12), rgba(52,211,153,0.12)), #0f172a !important;
+}
+.theme-dark .el-table th.el-table-fixed-column--right,
+.theme-dark .el-table th.el-table-fixed-column--left {
+  background-color: #0f172a !important;
+}
+.theme-dark .el-table__fixed-right,
+.theme-dark .el-table__fixed,
+.theme-dark .el-table__fixed-right-patch,
+.theme-dark .el-table__fixed-left-patch {
+  background-color: #0f172a !important;
+}
+.theme-dark .el-table__fixed-right td.el-table__cell,
+.theme-dark .el-table__fixed-right th.el-table__cell,
+.theme-dark .el-table__fixed td.el-table__cell,
+.theme-dark .el-table__fixed th.el-table__cell {
+  background-color: #0f172a !important;
+}
+.theme-dark .el-table__fixed-right .el-table__row:hover td.el-table__cell,
+.theme-dark .el-table__fixed .el-table__row:hover td.el-table__cell {
+  background: linear-gradient(rgba(52,211,153,0.12), rgba(52,211,153,0.12)), #0f172a !important;
 }
 
 /* ----- 分页 ----- */
@@ -879,6 +1069,6 @@ html.dark .el-popper.is-light {
 /* 亮色模式清理 */
 .theme-light .dataset-detail,
 .theme-light .task-create-page {
-  background: transparent !important;
+  background: #fff !important;
 }
 </style>

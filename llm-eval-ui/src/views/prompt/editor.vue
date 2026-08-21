@@ -7,7 +7,8 @@
           <el-icon><ArrowLeft /></el-icon><span>返回</span>
         </el-button>
         <div class="topbar-sep" />
-        <el-input v-model="form.name" placeholder="评估器名称" class="topbar-field topbar-name" />
+        <el-input v-model="form.name" placeholder="评估器名称（回车保存）" class="topbar-field topbar-name" @keyup.enter="handleSave" @blur="checkPromptName" @input="onNameInput" />
+        <span v-if="nameTaken" class="name-taken-tip"><el-icon><WarningFilled /></el-icon>已存在同名评估器，请更换名称</span>
         <el-input v-model="form.description" placeholder="描述（可选）" class="topbar-field topbar-desc" />
       </div>
       <div class="topbar-right">
@@ -29,8 +30,8 @@
           <div class="cfg-row">
             <span class="cfg-label">编辑模式</span>
             <el-radio-group v-model="editMode" size="small">
-              <el-radio-button label="structured">结构化</el-radio-button>
               <el-radio-button label="free">自由文本</el-radio-button>
+              <el-radio-button label="structured">结构化</el-radio-button>
             </el-radio-group>
             <el-popover trigger="click" :width="420" placement="bottom-start">
               <template #reference>
@@ -90,6 +91,9 @@
             <div class="cfg-row">
               <span class="cfg-label">评分维度</span>
               <div class="cfg-dim-actions">
+                <el-button size="small" type="primary" plain :loading="polishJob.running" @click="handlePolish" :disabled="!dimConfig.dimensions.length">
+                  <el-icon style="margin-right:3px"><MagicStick /></el-icon>AI 润色
+                </el-button>
                 <el-button v-if="dimConfig.dimensions.length" size="small" type="danger" plain
                   @click="dimConfig.dimensions = []">
                   <el-icon style="margin-right:3px"><Delete /></el-icon>清空
@@ -98,6 +102,11 @@
                   <el-icon style="margin-right:3px"><Plus /></el-icon>添加维度
                 </el-button>
               </div>
+            </div>
+
+            <div v-if="polishJob.running" class="cfg-hint" style="margin-top:8px; display:flex; align-items:center; gap:10px">
+              <el-progress :percentage="polishJob.progress" :stroke-width="6" style="flex:1" />
+              <span style="white-space:nowrap">{{ polishJob.progressText }}</span>
             </div>
 
             <div v-if="!dimConfig.dimensions.length" class="cfg-empty">
@@ -169,19 +178,6 @@
               placeholder="额外指令（可选），如：可用性=不可用时直接判定 badcase" style="margin-top:8px" />
           </div>
 
-          <!-- Chain-of-Thought -->
-          <div class="cfg-section">
-            <div class="cfg-row">
-              <span class="cfg-label">思维链引导 (CoT)</span>
-              <el-switch v-model="dimConfig.enable_cot" />
-            </div>
-            <div class="cfg-hint" :class="{ 'hint-active': dimConfig.enable_cot }">
-              {{ dimConfig.enable_cot
-                ? '已开启：Prompt 要求模型逐步分析各维度后再输出评分，提升复杂场景判断质量'
-                : '关闭：直接输出评分结果' }}
-            </div>
-          </div>
-
           <!-- Few-shot 示例 -->
           <div class="cfg-section">
             <div class="cfg-row">
@@ -230,9 +226,13 @@
           <div class="cfg-section free-prompt-section">
             <div class="cfg-row" style="margin-bottom:10px">
               <span class="cfg-label" style="margin-bottom:0">评估 Prompt</span>
-              <el-button size="small" type="primary" plain :loading="parsing" @click="handleParseToDim">
+              <el-button size="small" type="primary" plain :loading="parseJob.running" @click="handleParseToDim">
                 <el-icon style="margin-right:3px"><MagicStick /></el-icon>AI 识别为结构化规则
               </el-button>
+            </div>
+            <div v-if="parseJob.running" class="cfg-hint" style="margin-top:10px; display:flex; align-items:center; gap:10px">
+              <el-progress :percentage="parseJob.progress" :stroke-width="6" style="flex:1" />
+              <span style="white-space:nowrap">{{ parseJob.progressText }}</span>
             </div>
             <el-input v-model="form.promptTemplate" type="textarea" class="free-textarea"
               placeholder="用自然语言描述你的评测标准，例如：&#10;&#10;评测客服机器人的回答质量，要求：&#10;1. 能准确理解用户意图，不能答非所问&#10;2. 回答要完整，不能遗漏关键点&#10;3. 语气要友好专业&#10;&#10;写完后点「AI 识别为结构化规则」自动转换维度" />
@@ -366,6 +366,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { promptApi, modelApi, playgroundApi, datasetApi } from '../../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { evaluatorTemplates, templateCategories, templateToDimConfig } from '../../data/evaluatorTemplates'
+import { useAsyncJob } from '../../composables/useAsyncJob'
 
 export default {
   name: 'PromptEditor',
@@ -379,9 +380,25 @@ export default {
     // ===== 表单数据 =====
     const form = ref({ name: '', description: '', promptTemplate: '', dimensionsConfig: '', evaluationMode: 'quality' })
     const editMode = ref('structured')
+    const nameTaken = ref(false)
 
-    const createDimConfig = () => ({ role: '', context_template: '', dimensions: [], badcase_rule: 'any', extra_instructions: '', enable_cot: false, few_shots: [] })
+    // 检测评估器名称是否已被占用（排除自身；新建时后端也会拒绝重复）
+    const checkPromptName = async () => {
+      const name = (form.value.name || '').trim()
+      if (!name) return
+      try {
+        const res = await promptApi.checkName(name, editingId.value || undefined)
+        nameTaken.value = res.data?.exists || false
+      } catch { /* 网络异常不阻塞保存 */ }
+    }
+    const onNameInput = () => { nameTaken.value = false }
+
+    const createDimConfig = () => ({ role: '', context_template: '', dimensions: [], badcase_rule: 'any', extra_instructions: '', few_shots: [] })
     const dimConfig = reactive(createDimConfig())
+
+    // ===== 异步任务（AI识别/润色，提交后轮询进度） =====
+    const parseJob = reactive(useAsyncJob())
+    const polishJob = reactive(useAsyncJob())
 
     // ===== 模板 =====
     const tplCat = ref('all')
@@ -401,7 +418,7 @@ export default {
       }
       Object.assign(dimConfig, { role: cfg.role, context_template: cfg.context_template,
         dimensions: cfg.dimensions, badcase_rule: cfg.badcase_rule, extra_instructions: cfg.extra_instructions,
-        enable_cot: false, few_shots: [] })
+        few_shots: [] })
       form.value.name = t.name
       form.value.description = t.description
       form.value.evaluationMode = t.evaluationMode || 'quality'
@@ -445,7 +462,6 @@ export default {
       return JSON.stringify({
         role: dimConfig.role, context_template: dimConfig.context_template,
         badcase_rule: dimConfig.badcase_rule, extra_instructions: dimConfig.extra_instructions,
-        enable_cot: !!dimConfig.enable_cot,
         few_shots: (dimConfig.few_shots || []).filter(fs => fs.question && fs.response),
         dimensions: dimConfig.dimensions.filter(d => (d.name || '').trim()).map(d => {
           const def = { name: d.name, scoring_type: d.scoring_type, badcase_threshold: d.badcase_threshold,
@@ -522,43 +538,64 @@ export default {
         finally { previewLoading.value = false }
       }, 500)
     }
-    watch([() => form.value.promptTemplate, () => dimConfig.role, () => dimConfig.context_template, () => dimConfig.extra_instructions, () => dimConfig.enable_cot, () => dimConfig.few_shots, editMode, () => dimConfig.dimensions], refreshPreview)
+    watch([() => form.value.promptTemplate, () => dimConfig.role, () => dimConfig.context_template, () => dimConfig.extra_instructions, () => dimConfig.few_shots, editMode, () => dimConfig.dimensions], refreshPreview)
     watch(() => dimConfig.dimensions, refreshPreview, { deep: true })
 
-    // ===== AI 识别为结构化规则 =====
-    const parsing = ref(false)
+    // ===== AI 识别为结构化规则（异步任务） =====
+    /** 将 AI 返回的 dimensions_config（对象或JSON字符串）应用到维度配置 */
+    const applyParsedConfig = (raw) => {
+      let cfg = raw
+      if (typeof cfg === 'string') { cfg = JSON.parse(cfg) }
+      if (!cfg || typeof cfg !== 'object' || !Array.isArray(cfg.dimensions)) { throw new Error('invalid config') }
+      Object.assign(dimConfig, { role: cfg.role || '', context_template: cfg.context_template || '',
+        badcase_rule: cfg.badcase_rule || 'any', extra_instructions: cfg.extra_instructions || '',
+        few_shots: (cfg.few_shots || []).map(fs => ({ question: fs.question, response: fs.response, reference: fs.reference, expected_output: fs.expected_output })),
+        dimensions: (cfg.dimensions || []).map(d => ({
+          name: d.name || '', scoring_type: d.scoring_type || 'score', badcase_threshold: d.badcase_threshold || '<3',
+          rubric: (d.rubric || []).map(r => ({ level: r.level, desc: r.desc })),
+          enum_values_str: d.enum_values ? d.enum_values.join('/') : '', __uid: uid()
+        }))
+      })
+    }
+
     const handleParseToDim = async () => {
       if (!form.value.promptTemplate.trim()) { ElMessage.warning('请先编写评测 Prompt'); return }
       const modelId = polishModelId.value
       if (!modelId) { ElMessage.warning('请先在右上角配置中选择一个模型'); return }
-      parsing.value = true
+      const ok = await parseJob.start(() => promptApi.parseToDimensions(modelId, form.value.promptTemplate))
+      if (!ok) return
+      if (parseJob.errorMessage) { ElMessage.error(parseJob.errorMessage); return }
       try {
-        const res = await promptApi.parseToDimensions(modelId, form.value.promptTemplate)
-        const cfg = JSON.parse(res.data)
-        Object.assign(dimConfig, { role: cfg.role || '', context_template: cfg.context_template || '',
-          badcase_rule: cfg.badcase_rule || 'any', extra_instructions: cfg.extra_instructions || '',
-          enable_cot: !!cfg.enable_cot,
-          few_shots: (cfg.few_shots || []).map(fs => ({ question: fs.question, response: fs.response, reference: fs.reference, expected_output: fs.expected_output })),
-          dimensions: (cfg.dimensions || []).map(d => ({
-            name: d.name || '', scoring_type: d.scoring_type || 'score', badcase_threshold: d.badcase_threshold || '<3',
-            rubric: (d.rubric || []).map(r => ({ level: r.level, desc: r.desc })),
-            enum_values_str: d.enum_values ? d.enum_values.join('/') : '', __uid: uid()
-          }))
-        })
-        editMode.value = 'structured'
-        ElMessage.success(`识别成功，生成 ${dimConfig.dimensions.length} 个维度`)
-      } catch (e) { ElMessage.error(e.response?.data?.message || '识别失败') }
-      finally { parsing.value = false }
+        applyParsedConfig(parseJob.result)
+      } catch (e) { ElMessage.error('识别结果格式异常，请重试'); return }
+      editMode.value = 'structured'
+      ElMessage.success(`识别成功，生成 ${dimConfig.dimensions.length} 个维度`)
     }
 
-    // ===== AI 润色 =====
+    // ===== AI 润色（异步任务） =====
+    const handlePolish = async () => {
+      if (!dimConfig.dimensions.length) { ElMessage.warning('请先添加评分维度'); return }
+      if (!polishModelId.value) { ElMessage.warning('请先在右上角配置中选择一个模型'); return }
+      const ok = await polishJob.start(() => promptApi.polish(polishModelId.value, buildDimensionsConfig()))
+      if (!ok) return
+      if (polishJob.errorMessage) { ElMessage.error(polishJob.errorMessage); return }
+      try {
+        // 润色结果不包含 few_shots，保留用户已添加的示例
+        const keepFewShots = dimConfig.few_shots
+        applyParsedConfig(polishJob.result)
+        dimConfig.few_shots = keepFewShots
+      } catch (e) { ElMessage.error('润色结果格式异常，请重试'); return }
+      ElMessage.success('润色完成，已更新评分维度')
+      refreshPreview()
+    }
+
+    // ===== 润色模型 =====
     const polishModelId = ref(null)
     const polishModels = ref([])
-    const polishing = ref(false)
     const loadPolishModels = async () => {
       try {
-        const res = await modelApi.list(1, 100)
-        polishModels.value = res.data.records.filter(m => m.status === 1)
+        const res = await modelApi.list(1, 100, undefined, 1)
+        polishModels.value = res.data.records
         const ds = polishModels.value.find(m => /deepseek/i.test(m.name || '') || /deepseek/i.test(m.modelId || ''))
         polishModelId.value = ds?.id || polishModels.value[0]?.id || null
       } catch {}
@@ -570,6 +607,11 @@ export default {
     // ===== 保存 =====
     const handleSave = async () => {
       if (!form.value.name?.trim()) { ElMessage.warning('请填写评估器名称'); return }
+      await checkPromptName()
+      if (nameTaken.value) {
+        ElMessage.error(`评估器名称「${form.value.name.trim()}」已被其他评估器使用，请更换名称`)
+        return
+      }
       if (editMode.value === 'structured') {
         const validDims = dimConfig.dimensions.filter(d => d.name?.trim())
         if (!validDims.length) { ElMessage.warning('请至少添加一个评分维度'); return }
@@ -616,7 +658,7 @@ export default {
         try { const res = await promptApi.preview({ dimensionsConfig: buildDimensionsConfig() }); promptText = res.data } catch { ElMessage.error('生成 Prompt 失败'); return }
       } else { promptText = form.value.promptTemplate }
       pgPromptTemplate.value = promptText; pgResult.value = null; pgFields.value = {}; pgView.value = 'editor'; pgRenderedPrompt.value = ''
-      if (!pgModels.value.length) { try { const res = await modelApi.list(1, 100); pgModels.value = res.data.records.filter(m => m.status === 1); if (pgModels.value.length) pgModelId.value = pgModels.value[0].id } catch {} }
+      if (!pgModels.value.length) { try { const res = await modelApi.list(1, 100, undefined, 1); pgModels.value = res.data.records; if (pgModels.value.length) pgModelId.value = pgModels.value[0].id } catch {} }
       showPlayground.value = true
     }
     const runPlayground = async () => {
@@ -671,7 +713,6 @@ export default {
               Object.assign(dimConfig, { role: p.role || '', context_template: p.context_template || '',
                 dimensions: (p.dimensions || []).map(d => ({ ...d, enum_values_str: d.enum_values ? d.enum_values.join('/') : '', __uid: uid() })),
                 badcase_rule: p.badcase_rule || 'any', extra_instructions: p.extra_instructions || '',
-                enable_cot: !!p.enable_cot,
                 few_shots: (p.few_shots || []).map(fs => ({ question: fs.question || '', response: fs.response || '', reference: fs.reference || '', expected_output: fs.expected_output || '' })) })
             } catch { Object.assign(dimConfig, createDimConfig()) }
           } else {
@@ -688,7 +729,7 @@ export default {
     onMounted(init)
 
     return {
-      loading, saving, editingId, form, editMode, dimConfig,
+      loading, saving, editingId, form, editMode, dimConfig, nameTaken, checkPromptName, onNameInput,
       // 模板
       tplCat, filteredTemplates, applyTemplate,
       // Few-shot
@@ -698,7 +739,7 @@ export default {
       // 预览
       previewText, formattedPreview, previewLoading, refreshPreview,
       // AI
-      parsing, handleParseToDim, polishModelId, polishing,
+      parseJob, polishJob, handleParseToDim, handlePolish, polishModelId,
       // 路由
       goBack, handleSave,
       // Playground
@@ -727,6 +768,14 @@ export default {
 .topbar-field :deep(.el-input__wrapper.is-focus) { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 .topbar-name { width: 200px; }
 .topbar-name :deep(.el-input__inner) { font-weight: 600; font-size: 15px; }
+.topbar-name { position: relative; }
+.name-taken-tip {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 10;
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 8px; border-radius: 6px; white-space: nowrap;
+  font-size: 11px; color: #dc2626;
+  background: #fef2f2; border: 1px solid #fecaca;
+}
 .topbar-desc { width: 260px; }
 
 /* ===== 主体 ===== */
@@ -736,7 +785,7 @@ export default {
 
 /* ===== 左栏配置区 ===== */
 .cfg-section {
-  background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 10px;
+  background: var(--bg-panel); border: 1px solid #e5e7eb; border-radius: 10px;
   padding: 12px 14px;
 }
 .free-prompt-section { flex: 1; display: flex; flex-direction: column; }
@@ -801,7 +850,7 @@ export default {
 
 /* ===== Few-shot ===== */
 .fewshot-card { border: 1px solid #e5e7eb; border-radius: 8px; margin-top: 8px; overflow: hidden; background: #ffffff; }
-.fewshot-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; background: #f9fafb; border-bottom: 1px solid #e5e7eb; }
+.fewshot-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; background: var(--bg-panel); border-bottom: 1px solid #e5e7eb; }
 .fewshot-idx { font-size: 12px; font-weight: 600; color: #4b5563; }
 .fewshot-fields { padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
 .fewshot-field { display: flex; align-items: flex-start; gap: 6px; }
@@ -813,11 +862,11 @@ export default {
 .preview-title { font-size: 14px; font-weight: 600; color: #111827; }
 .preview-box {
   flex: 1; min-height: 0; border: 1px solid #e5e7eb; border-radius: 10px;
-  background: #f9fafb; overflow: hidden; display: flex;
+  background: var(--bg-panel); overflow: hidden; display: flex;
 }
 .preview-pre {
   margin: 0; padding: 14px; font-size: 12px; line-height: 1.7; white-space: pre-wrap;
-  word-break: break-word; overflow-y: auto; color: #1f2937; width: 100%;
+  word-break: break-word; overflow-y: auto; color: var(--text-prime); width: 100%;
   font-family: 'Consolas', 'SF Mono', Menlo, monospace;
 }
 .preview-empty {
@@ -843,7 +892,7 @@ export default {
 /* ===== Playground 弹窗 ===== */
 .pg-dialog :deep(.el-dialog__header) { padding: 14px 20px 10px; border-bottom: 1px solid #e5e7eb; margin-right: 0; }
 .pg-dialog :deep(.el-dialog__body) { padding: 0; overflow: hidden; }
-.pg-toolbar { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; background: #f9fafb; border-bottom: 1px solid #e5e7eb; }
+.pg-toolbar { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; background: var(--bg-panel); border-bottom: 1px solid #e5e7eb; }
 .pg-toolbar-left { display: flex; align-items: center; gap: 8px; }
 .pg-toolbar-label { font-size: 13px; font-weight: 600; color: #4b5563; }
 .pg-body { display: flex; height: 56vh; min-height: 400px; }
@@ -859,7 +908,7 @@ export default {
 .pg-switch { display: flex; gap: 2px; padding: 2px; background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 6px; }
 .pg-switch-item { padding: 2px 10px; font-size: 11px; border-radius: 4px; color: #9ca3af; cursor: pointer; transition: all .15s; user-select: none; }
 .pg-switch-item.active { background: var(--accent); color: #fff; font-weight: 600; }
-.pg-textarea { width: 100%; flex: 1; min-height: 0; resize: none; padding: 10px 12px; font-family: 'Consolas', 'SF Mono', Menlo, monospace; font-size: 12px; line-height: 1.6; border: 1px solid #e5e7eb; border-radius: 8px; background: #ffffff; color: #1f2937; outline: none; box-sizing: border-box; }
+.pg-textarea { width: 100%; flex: 1; min-height: 0; resize: none; padding: 10px 12px; font-family: 'Consolas', 'SF Mono', Menlo, monospace; font-size: 12px; line-height: 1.6; border: 1px solid #e5e7eb; border-radius: 8px; background: #ffffff; color: var(--text-prime); outline: none; box-sizing: border-box; }
 .pg-textarea:focus { border-color: var(--accent); }
 .pg-rendered-wrap { flex: 1; min-height: 0; overflow-y: auto; border: 1px solid #e5e7eb; border-radius: 8px; background: #ffffff; }
 .pg-rendered { margin: 0; padding: 12px; font-family: monospace; font-size: 12px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
@@ -868,12 +917,12 @@ export default {
 .pg-field { display: flex; flex-direction: column; gap: 3px; padding: 6px 8px; background: #ffffff; border: 1px solid #e5e7eb; border-radius: 6px; }
 .pg-field:focus-within { border-color: var(--accent); }
 .pg-field-name { font-size: 11px; font-weight: 600; color: #059669; font-family: monospace; }
-.pg-field-input { width: 100%; padding: 4px 6px; font-size: 12px; border: 1px solid transparent; border-radius: 4px; background: #f9fafb; color: #1f2937; outline: none; font-family: inherit; box-sizing: border-box; }
+.pg-field-input { width: 100%; padding: 4px 6px; font-size: 12px; border: 1px solid transparent; border-radius: 4px; background: var(--bg-panel); color: var(--text-prime); outline: none; font-family: inherit; box-sizing: border-box; }
 .pg-field-input:focus { border-color: var(--accent); }
 .pg-empty-tip { padding: 12px; border: 1px dashed #d1d5db; border-radius: 8px; font-size: 12px; color: #9ca3af; background: #ffffff; }
 .pg-empty-tip code { background: #ecfdf5; padding: 0 4px; border-radius: 3px; color: #059669; }
 .pg-output-section { flex: 0 0 220px; min-height: 0; }
 .pg-response-box { flex: 1; min-height: 140px; padding: 12px; background: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px; overflow-y: auto; display: flex; align-items: flex-start; box-sizing: border-box; }
-.pg-response-text { font-family: monospace; font-size: 12px; line-height: 1.7; color: #1f2937; white-space: pre-wrap; word-break: break-word; width: 100%; }
+.pg-response-text { font-family: monospace; font-size: 12px; line-height: 1.7; color: var(--text-prime); white-space: pre-wrap; word-break: break-word; width: 100%; }
 .pg-response-empty { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 100%; color: #9ca3af; font-size: 12px; flex-direction: column; }
 </style>

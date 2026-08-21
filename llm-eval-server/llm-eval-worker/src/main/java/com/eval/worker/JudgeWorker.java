@@ -367,14 +367,15 @@ public class JudgeWorker {
 
         JSONObject jsonObj = JSONUtil.parseObj(jsonStr); // 抛异常由调用方处理
 
-        // 解析 is_badcase：兼容多种写法；null/unknown → 整体 unknown（judge_status 仍 JUDGED）
+        // 解析整体判定：优先读 overall（新三态格式），兼容 is_badcase / badcase（旧格式）
         Integer verdict = null;
-        if (jsonObj.containsKey("is_badcase")) {
+        if (jsonObj.containsKey("overall")) {
+            verdict = parseOverallVerdict(jsonObj.get("overall"));
+        } else if (jsonObj.containsKey("is_badcase")) {
             verdict = parseLegacyVerdict(jsonObj.get("is_badcase"));
         } else if (jsonObj.containsKey("badcase")) {
             verdict = parseLegacyVerdict(jsonObj.get("badcase"));
         } else {
-            // 旧行为：未显式输出 is_badcase 默认 goodcase
             verdict = 0;
         }
         jr.setIsBadcase(verdict);
@@ -411,9 +412,10 @@ public class JudgeWorker {
                             dimBad = score < 3;
                         } catch (Exception ignored) {}
                     } else if (dimRes.containsKey("result") && dimRes.get("result") != null) {
-                        // 布尔/枚举类型：result=false 或 含"不采纳/否/B/差"视为 badcase
+                        // 枚举/布尔类型：result="bad"/"不采纳"/"B"/"差" 视为 badcase；"unknown" 视为无法判断（不算 bad）
                         String rs = dimRes.get("result").toString().trim();
-                        dimBad = "false".equalsIgnoreCase(rs) || "否".equals(rs)
+                        dimBad = "bad".equalsIgnoreCase(rs)
+                                || "false".equalsIgnoreCase(rs) || "否".equals(rs)
                                 || "不采纳".equals(rs) || "B".equals(rs) || "差".equals(rs);
                     }
                     if (dimBad) badDims.add(key);
@@ -449,6 +451,20 @@ public class JudgeWorker {
         }
         if ("是".equals(s) || "true".equalsIgnoreCase(s) || "1".equals(s)) return 1;
         return 0;
+    }
+
+    /**
+     * 解析新三态 overall 字段为数据库值：
+     * "good" → 0, "bad" → 1, "unknown" → null
+     */
+    private Integer parseOverallVerdict(Object raw) {
+        if (raw == null) return null;
+        String s = raw.toString().trim().toLowerCase();
+        if ("bad".equals(s)) return 1;
+        if ("good".equals(s)) return 0;
+        if ("unknown".equals(s)) return null;
+        // 兼容旧格式兜底
+        return parseLegacyVerdict(raw);
     }
 
     /**

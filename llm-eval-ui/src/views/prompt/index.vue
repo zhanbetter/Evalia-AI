@@ -8,8 +8,8 @@
       <div class="header-right">
         <el-input v-model="keyword" placeholder="搜索评估器..." clearable style="width: 200px" @keyup.enter="loadPrompts(1)" @clear="loadPrompts(1)" />
         <el-select v-model="searchMode" placeholder="模式" clearable style="width: 120px" @change="loadPrompts(1)">
-          <el-option label="结构化" value="structured" />
           <el-option label="自由文本" value="free" />
+          <el-option label="结构化" value="structured" />
         </el-select>
         <el-button type="primary" @click="$router.push('/prompt/editor')">
           <el-icon style="margin-right:4px"><Plus /></el-icon>添加评估器
@@ -24,12 +24,12 @@
         <div><div class="stat-num">{{ prompts.length }}</div><div class="stat-label">评估器总数</div></div>
       </div>
       <div class="stat-card">
-        <div class="stat-icon indigo"><el-icon :size="18"><List /></el-icon></div>
-        <div><div class="stat-num">{{ structuredCount }}</div><div class="stat-label">结构化</div></div>
-      </div>
-      <div class="stat-card">
         <div class="stat-icon orange"><el-icon :size="18"><Document /></el-icon></div>
         <div><div class="stat-num">{{ freeCount }}</div><div class="stat-label">自由文本</div></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon indigo"><el-icon :size="18"><List /></el-icon></div>
+        <div><div class="stat-num">{{ structuredCount }}</div><div class="stat-label">结构化</div></div>
       </div>
     </div>
 
@@ -100,16 +100,10 @@
     </el-dialog>
 
     <!-- 版本预览弹窗 -->
-    <el-dialog v-model="showVersionPreview" title="版本预览" width="800px">
-      <div v-if="versionPreviewData" style="display:flex;gap:12px">
-        <div style="flex:1;min-width:0">
-          <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:var(--text-sec)">维度配置</div>
-          <pre style="font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-all;padding:12px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;max-height:400px;overflow-y:auto">{{ formatJson(versionPreviewData.dimensionsConfig) }}</pre>
-        </div>
-        <div style="width:300px;flex-shrink:0">
-          <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:var(--text-sec)">Prompt</div>
-          <div style="padding:12px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;font-size:12px;line-height:1.6;white-space:pre-wrap;max-height:400px;overflow-y:auto">{{ versionPreviewData.prompt }}</div>
-        </div>
+    <el-dialog v-model="showVersionPreview" title="版本预览" width="680px">
+      <div v-if="versionPreviewData">
+        <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:var(--text-sec)">Prompt</div>
+        <div style="padding:12px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;font-size:12px;line-height:1.6;white-space:pre-wrap;max-height:480px;overflow-y:auto">{{ formatJson(versionPreviewData.promptTemplate) }}</div>
       </div>
       <template #footer>
         <el-button @click="showVersionPreview = false">关闭</el-button>
@@ -120,7 +114,7 @@
 </template>
 
 <script>
-import axios from 'axios'
+import request from '../../api/request'
 import { promptApi } from '../../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -144,9 +138,9 @@ export default {
         const params = { page, size: this.pageSize }
         if (this.keyword) params.keyword = this.keyword
         if (this.searchMode) params.mode = this.searchMode
-        const { data } = await axios.get('/api/prompts', { params })
-        if (data.code === 200) {
-          this.prompts = data.data.records || []; this.total = data.data.total || 0
+        const res = await request.get('/prompts', { params })
+        if (res.code === 200) {
+          this.prompts = res.data.records || []; this.total = res.data.total || 0
           this.structuredCount = this.prompts.filter(p => p.dimensionsConfig).length
           this.freeCount = this.prompts.filter(p => !p.dimensionsConfig).length
         }
@@ -157,9 +151,9 @@ export default {
     async handleDelete(p) {
       try {
         await ElMessageBox.confirm(`确定删除「${p.name}」？`, '确认删除', { type: 'warning' })
-        const { data } = await axios.delete(`/api/prompts/${p.id}`)
-        if (data.code === 200) { ElMessage.success('删除成功'); this.loadPrompts(this.currentPage) }
-        else { ElMessage.error(data.message || '删除失败') }
+        const res = await request.delete(`/prompts/${p.id}`)
+        if (res.code === 200) { ElMessage.success('删除成功'); this.loadPrompts(this.currentPage) }
+        else { ElMessage.error(res.message || '删除失败') }
       } catch {}
     },
 

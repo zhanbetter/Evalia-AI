@@ -45,6 +45,9 @@ public class EvalDataset implements Serializable {
     /** 样本总数 */
     private Integer totalCount;
 
+    /** 创建者ID（eval_user.id）；null=历史无归属数据（仅管理员可删） */
+    private Long createdBy;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdAt;
 }

@@ -15,23 +15,25 @@
 
     <el-tabs v-model="activeTab" type="border-card">
       <!-- Schema Tab -->
-      <el-tab-pane label="字段定义" name="schema">
-        <div style="margin-bottom: 12px">
+      <el-tab-pane label="字段定义" name="schema" class="schema-tab-pane">
+        <div style="margin-bottom: 12px; flex-shrink: 0">
           <el-button type="primary" size="small" @click="showAddSchemaField = true">添加字段</el-button>
           <el-button size="small" @click="saveSchema" :loading="savingSchema">保存修改</el-button>
         </div>
-        <el-table :data="schemaFields" stripe border size="small">
-          <el-table-column prop="fieldName" label="原始字段名" width="140" />
-          <el-table-column label="显示名称" width="140">
-            <template #default="{ row }"><el-input v-model="row.displayName" size="small" /></template>
-          </el-table-column>
-          <el-table-column label="角色" width="150">
-            <template #default="{ row }">
-              <el-select v-model="row.role" size="small" :teleported="true" style="width: 100%">
+        <div class="schema-tab-table">
+          <el-table :data="schemaFields" stripe border size="small" style="width: 100%" height="100%">
+            <el-table-column prop="fieldName" label="原始字段名" min-width="120" show-overflow-tooltip />
+            <el-table-column label="显示名称" min-width="120">
+              <template #default="{ row }"><el-input v-model="row.displayName" size="small" /></template>
+            </el-table-column>
+            <el-table-column label="角色" width="170">
+              <template #default="{ row }">
+                <el-select v-model="row.role" size="small" :teleported="true" style="width: 100%">
                 <el-option label="问题(QUESTION)" value="QUESTION" />
                 <el-option label="参考答案(REFERENCE)" value="REFERENCE" />
                 <el-option label="上下文(CONTEXT)" value="CONTEXT" />
                 <el-option label="分类(CATEGORY)" value="CATEGORY" />
+                <el-option label="模型回答(MODEL_RESPONSE)" value="MODEL_RESPONSE" />
                 <el-option label="自定义(CUSTOM)" value="CUSTOM" />
               </el-select>
             </template>
@@ -45,12 +47,13 @@
           <el-table-column label="操作" width="80">
             <template #default="{ $index }"><el-button size="small" type="danger" link @click="schemaFields.splice($index, 1)">删除</el-button></template>
           </el-table-column>
-        </el-table>
+          </el-table>
+        </div>
         <el-dialog v-model="showAddSchemaField" title="添加字段" width="450px">
           <el-form :model="newField" label-width="80px">
             <el-form-item label="字段名"><el-input v-model="newField.fieldName" /></el-form-item>
             <el-form-item label="显示名"><el-input v-model="newField.displayName" /></el-form-item>
-            <el-form-item label="角色"><el-select v-model="newField.role"><el-option label="问题(QUESTION)" value="QUESTION" /><el-option label="参考答案(REFERENCE)" value="REFERENCE" /><el-option label="上下文(CONTEXT)" value="CONTEXT" /><el-option label="分类(CATEGORY)" value="CATEGORY" /><el-option label="自定义(CUSTOM)" value="CUSTOM" /></el-select></el-form-item>
+            <el-form-item label="角色"><el-select v-model="newField.role"><el-option label="问题(QUESTION)" value="QUESTION" /><el-option label="参考答案(REFERENCE)" value="REFERENCE" /><el-option label="上下文(CONTEXT)" value="CONTEXT" /><el-option label="分类(CATEGORY)" value="CATEGORY" /><el-option label="模型回答(MODEL_RESPONSE)" value="MODEL_RESPONSE" /><el-option label="自定义(CUSTOM)" value="CUSTOM" /></el-select></el-form-item>
             <el-form-item label="描述"><el-input v-model="newField.description" /></el-form-item>
           </el-form>
           <template #footer><el-button @click="showAddSchemaField = false">取消</el-button><el-button type="primary" @click="addSchemaField">添加</el-button></template>
@@ -68,8 +71,9 @@
           <el-button size="small" type="primary" plain @click="loadItems">搜索</el-button>
         </div>
         <div class="data-tab-table">
-          <el-table :data="items" stripe border size="small" v-loading="itemsLoading" style="width:100%" height="100%">
-            <el-table-column prop="seqNo" label="#" width="72" fixed align="center">
+          <el-empty v-if="!schemaFields.length && !itemsLoading" description="暂无字段定义，请先在「字段定义」中添加字段" style="padding: 40px 0" />
+          <el-table v-else :data="items" stripe border size="small" v-loading="itemsLoading" style="width:100%" height="100%" :row-key="row => row.id">
+            <el-table-column prop="seqNo" label="#" width="72" align="center">
               <template #default="{ row }">
                 <span style="font-family: monospace; color: var(--text-sec);">{{ row.seqNo }}</span>
               </template>
@@ -80,7 +84,7 @@
                 <div class="cell-wrap">{{ getItemFieldValue(row, sf) }}</div>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="120" fixed="right">
+            <el-table-column label="操作" width="120" fixed="right" class-name="op-col">
               <template #default="{ row }">
                 <el-button size="small" link @click="editItem(row)">编辑</el-button>
                 <el-button size="small" link type="danger" @click="deleteItem(row)">删除</el-button>
@@ -89,7 +93,7 @@
           </el-table>
         </div>
         <el-pagination v-model:current-page="itemPage" v-model:page-size="itemSize" :total="itemTotal"
-          layout="total, prev, pager, next" @current-change="loadItems" />
+          layout="total, prev, pager, next" @current-change="loadItems" style="margin-top: 14px; flex-shrink: 0" />
 
         <!-- 添加/编辑条目弹窗：根据 Schema 动态生成表单 -->
         <el-dialog v-model="showAddItem" :title="editingItem ? '编辑条目' : '添加条目'" width="700px">
@@ -158,10 +162,17 @@
           </div>
           <!-- Step 2 -->
           <div v-if="newVersionStep === 1">
+            <el-alert title="勾选需要导入的字段，未勾选的字段将被忽略" type="info" :closable="false" show-icon style="margin-bottom: 12px" />
             <el-table :data="nvMappingFields" stripe border size="small">
+              <el-table-column label="" width="45" align="center">
+                <template #header>
+                  <el-checkbox :model-value="nvMappingFields.length > 0 && nvMappingFields.every(f => f.selected)" @change="val => nvMappingFields.forEach(f => f.selected = val)" />
+                </template>
+                <template #default="{ row }"><el-checkbox v-model="row.selected" /></template>
+              </el-table-column>
               <el-table-column prop="fieldName" label="字段名" width="130" />
               <el-table-column label="显示名" width="130"><template #default="{ row }"><el-input v-model="row.displayName" size="small" /></template></el-table-column>
-              <el-table-column label="角色" width="150"><template #default="{ row }"><el-select v-model="row.role" size="small"><el-option label="问题" value="QUESTION" /><el-option label="参考答案" value="REFERENCE" /><el-option label="上下文" value="CONTEXT" /><el-option label="分类" value="CATEGORY" /><el-option label="自定义" value="CUSTOM" /></el-select></template></el-table-column>
+              <el-table-column label="角色" width="150"><template #default="{ row }"><el-select v-model="row.role" size="small"><el-option label="问题" value="QUESTION" /><el-option label="参考答案" value="REFERENCE" /><el-option label="上下文" value="CONTEXT" /><el-option label="分类" value="CATEGORY" /><el-option label="模型回答" value="MODEL_RESPONSE" /><el-option label="自定义" value="CUSTOM" /></el-select></template></el-table-column>
               <el-table-column label="描述" min-width="120"><template #default="{ row }"><el-input v-model="row.description" size="small" /></template></el-table-column>
             </el-table>
             <div style="text-align:right; margin-top: 16px">
@@ -178,14 +189,18 @@
           <div class="dup-config-row">
             <span class="dup-label">检测字段</span>
             <el-select v-model="dupFieldName" size="small" style="width: 200px">
-              <el-option v-for="sf in schemaFields" :key="sf.fieldName" :label="sf.displayName || sf.fieldName" :value="dupFieldNameValue(sf)" :disabled="sf.role === 'CUSTOM'" />
+              <el-option v-for="sf in schemaFields" :key="sf.fieldName" :label="sf.displayName || sf.fieldName" :value="dupFieldNameValue(sf)" />
             </el-select>
             <span class="dup-label" style="margin-left:20px">相似度阈值</span>
             <el-slider v-model="dupThreshold" :min="0.5" :max="1" :step="0.05" style="width: 200px; margin-left: 8px" :format-tooltip="v => v.toFixed(2)" />
             <span class="dup-thresh-val">{{ dupThreshold.toFixed(2) }}</span>
-            <el-button type="primary" size="small" :loading="dupLoading" @click="runDuplicateDetect" style="margin-left: 16px">
+            <el-button type="primary" size="small" :loading="dupJob.running" @click="runDuplicateDetect" style="margin-left: 16px">
               <el-icon style="margin-right:3px"><VideoPlay /></el-icon>开始检测
             </el-button>
+          </div>
+          <div v-if="dupJob.running" style="margin-top:10px; display:flex; align-items:center; gap:12px; font-size:12px; color:var(--text-sec)">
+            <el-progress :percentage="dupJob.progress" :stroke-width="6" style="flex:1" />
+            <span style="white-space:nowrap">{{ dupJob.progressText }}</span>
           </div>
         </div>
         <div v-if="dupDetectResult" class="dup-result">
@@ -257,16 +272,175 @@
           <el-table-column prop="createdAt" label="评测时间" width="160" :formatter="formatTime" />
         </el-table>
       </el-tab-pane>
+
+      <!-- 金标准标注 Tab -->
+      <el-tab-pane label="金标准标注" name="gold">
+        <div class="gold-identity" style="margin-bottom: 12px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap">
+          <span style="font-size: 13px; font-weight: 600; color: var(--text-sec)">标注者</span>
+          <el-input v-model="annotatorName" size="small" placeholder="填写你的姓名，将自动记住" clearable style="width: 180px" />
+          <el-select v-model="annotatorRole" size="small" style="width: 130px">
+            <el-option label="标注员" value="ANNOTATOR" />
+            <el-option label="专家" value="EXPERT" />
+            <el-option label="复核" value="REVIEWER" />
+          </el-select>
+          <el-button size="small" type="primary" plain @click="startGoldAll">开始连标（本页）</el-button>
+          <el-button size="small" @click="loadGold(); loadGoldStats()">刷新</el-button>
+          <span style="font-size: 12px; color: var(--text-mute)">判定「是否为 badcase」，保存自动切下一条；同一标注者可反复修改，多人标注后自动做一致性统计</span>
+        </div>
+
+        <div class="gold-stats" v-loading="goldStatsLoading" style="margin-bottom: 14px">
+          <div class="gold-stat-card">
+            <div class="gold-stat-num">{{ pct(goldStatsData?.coverageRate) }}</div>
+            <div class="gold-stat-label">覆盖率（{{ goldStatsData?.annotatedItems ?? 0 }}/{{ goldStatsData?.totalItems ?? 0 }} 条）</div>
+          </div>
+          <div class="gold-stat-card">
+            <div class="gold-stat-num">{{ pct(goldStatsData?.agreementRate) }}</div>
+            <div class="gold-stat-label">一致率（{{ goldStatsData?.agreedItems ?? 0 }}/{{ goldStatsData?.multiAnnotatedItems ?? 0 }} 条）</div>
+          </div>
+          <div class="gold-stat-card">
+            <div class="gold-stat-num">{{ kappa() }}</div>
+            <div class="gold-stat-label">Fleiss Kappa</div>
+          </div>
+          <div class="gold-annotators">
+            <div class="gold-annotators-title">标注者分布</div>
+            <div v-if="goldStatsData?.annotatorStats?.length" class="gold-annotator-tags">
+              <el-tag v-for="a in goldStatsData.annotatorStats" :key="a.annotator" size="small" effect="plain" class="gold-anno-chip">
+                {{ a.annotator }}({{ roleCN(a.role) }}): {{ a.goodCount }} good / {{ a.badCount }} bad
+              </el-tag>
+            </div>
+            <div v-else style="font-size: 12px; color: var(--text-mute)">暂无标注</div>
+          </div>
+        </div>
+
+        <div class="data-tab-table" style="max-height: 360px">
+          <el-table :data="goldItems" stripe border size="small" v-loading="goldLoading" style="width:100%" :max-height="360" :row-key="row => row.id">
+            <el-table-column prop="seqNo" label="#" width="60" align="center">
+              <template #default="{ row }"><span style="font-family: monospace; color: var(--text-sec)">{{ row.seqNo }}</span></template>
+            </el-table-column>
+            <el-table-column label="问题" min-width="240">
+              <template #default="{ row }"><div class="cell-wrap">{{ row.question || '-' }}</div></template>
+            </el-table-column>
+            <el-table-column label="分类" width="100" show-overflow-tooltip>
+              <template #default="{ row }">{{ row.category || '-' }}</template>
+            </el-table-column>
+            <el-table-column label="投片" width="110" align="center">
+              <template #default="{ row }">
+                <span v-if="row.annotationCount" style="font-size: 12px">
+                  <span style="color: var(--accent); font-weight: 600">{{ row.goodCount }}</span> good /
+                  <span style="color: var(--red); font-weight: 600">{{ row.badCount }}</span> bad
+                </span>
+                <span v-else style="color: var(--text-mute); font-size: 12px">未标注</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="表决" width="130" align="center">
+              <template #default="{ row }">
+                <el-tag v-if="row.annotationCount" size="small" :type="row.verdict === 1 ? 'danger' : row.verdict === 0 ? 'success' : 'info'" :effect="row.hasDisagreement ? 'plain' : 'dark'">
+                  {{ row.verdict === 1 ? 'badcase' : row.verdict === 0 ? 'goodcase' : '平票待定' }}
+                </el-tag>
+                <el-tag v-if="row.hasDisagreement" size="small" type="warning" effect="light" style="margin-left: 4px">分歧</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="标注明细" min-width="200">
+              <template #default="{ row }">
+                <el-tag v-for="a in row.annotations" :key="a.id" size="small" :type="a.isBadcase === 1 ? 'danger' : 'success'" effect="light" class="gold-anno-chip" :title="a.comment || ''">
+                  {{ a.annotator }}：{{ a.isBadcase === 1 ? 'bad' : 'good' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="140" fixed="right" align="center">
+              <template #default="{ row }">
+                <el-button size="small" link type="primary" @click="startGoldWorkbench(row)">{{ goldMyAnnotation(row) ? '修改' : '标注' }}</el-button>
+                <el-button v-if="goldMyAnnotation(row)" size="small" link type="danger" @click="removeGoldAnnotation(row)">撤销</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+        <el-pagination v-model:current-page="goldPage" v-model:page-size="goldSize" :total="goldTotal"
+          layout="total, prev, pager, next" @current-change="loadGold" style="margin-top: 12px" />
+
+        <!-- 连续标注工作台 -->
+        <el-dialog v-model="showGoldWorkbench" width="86%" top="3vh" :close-on-click-modal="false">
+          <template #header>
+            <div style="display: flex; align-items: center; gap: 16px">
+              <span style="font-size: 15px; font-weight: 600">金标准连续标注</span>
+              <span style="font-size: 12px; color: var(--text-mute)">标注者：<b style="color: var(--accent)">{{ annotatorName || '未设置' }}</b>（{{ roleCN(annotatorRole) }}）</span>
+            </div>
+          </template>
+          <div v-if="goldStage" class="gold-wb">
+            <div class="gold-wb-nav">
+              <el-button size="small" :disabled="goldIdx <= 0" @click="wbPrev">上一条</el-button>
+              <span class="gold-wb-pos">#{{ goldStage.seqNo }} · {{ goldIdx + 1 }} / {{ goldQueue.length }}</span>
+              <el-button size="small" :disabled="goldIdx >= goldQueue.length - 1" @click="wbNext">下一条</el-button>
+              <span class="gold-wb-done">本页已由我标注 <b>{{ wbDoneCount }}</b> / {{ goldQueue.length }}</span>
+              <el-button size="small" @click="showGoldWorkbench = false" style="margin-left: auto">退出</el-button>
+            </div>
+
+            <div class="gold-wb-body">
+              <!-- 左侧：样本内容 -->
+              <div class="gold-wb-left">
+                <div v-if="goldDisplayFields(goldStage).length" class="gold-wb-fields">
+                  <div v-for="sf in goldDisplayFields(goldStage)" :key="sf.fieldName" class="gold-wb-field">
+                    <div class="gold-wb-field-label">{{ sf.displayName }}</div>
+                    <div class="gold-wb-field-value">{{ getItemFieldValue(goldStage, schemaFields.find(s => s.fieldName === sf.fieldName)) }}</div>
+                  </div>
+                </div>
+                <div v-else class="gold-wb-empty">该条目暂无字段内容</div>
+              </div>
+
+              <!-- 右侧：标注操作 -->
+              <div class="gold-wb-right">
+                <div class="gold-wb-ref">
+                  <div class="gold-wb-sec-title">已有标注（{{ goldStage.annotationCount || 0 }} 人）</div>
+                  <div v-if="goldStage.annotations?.length" class="gold-wb-ref-chips">
+                    <el-tag v-for="a in goldStage.annotations" :key="a.id" size="small" :type="a.isBadcase === 1 ? 'danger' : 'success'" effect="light" class="gold-anno-chip" :title="a.comment || ''">
+                      {{ a.annotator }}：{{ a.isBadcase === 1 ? 'bad' : 'good' }}
+                    </el-tag>
+                    <el-tag v-if="goldStage.hasDisagreement" size="small" type="warning" effect="plain">有分歧</el-tag>
+                  </div>
+                  <div v-else style="font-size: 12px; color: var(--text-mute)">暂无他人标注</div>
+                </div>
+
+                <div class="gold-wb-verdict">
+                  <div class="gold-wb-sec-title">我的判定</div>
+                  <div class="gold-wb-btns">
+                    <button type="button" class="gold-wb-btn bad" :class="{ active: wbForm.isBadcase === 1 }" @click="wbForm.isBadcase = 1">
+                      <span style="display:flex; align-items:center; gap:6px"><span class="gold-wb-key">1</span> badcase</span>
+                      <span class="gold-wb-btn-sub">问题样本</span>
+                    </button>
+                    <button type="button" class="gold-wb-btn good" :class="{ active: wbForm.isBadcase === 0 }" @click="wbForm.isBadcase = 0">
+                      <span style="display:flex; align-items:center; gap:6px"><span class="gold-wb-key">2</span> goodcase</span>
+                      <span class="gold-wb-btn-sub">达标样本</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div class="gold-wb-comment">
+                  <div class="gold-wb-sec-title">备注（选填）</div>
+                  <el-input v-model="wbForm.comment" type="textarea" :rows="3" placeholder="记录判定理由，便于复盘" />
+                </div>
+
+                <div class="gold-wb-actions">
+                  <el-button :loading="wbSaving" @click="wbSaveOnly">仅保存</el-button>
+                  <el-button type="primary" :loading="wbSaving" @click="wbSaveNext">保存并下一条</el-button>
+                </div>
+                <div class="gold-wb-kbd-hint">快捷键：1 = badcase，2 = goodcase，Enter = 保存并下一条</div>
+              </div>
+            </div>
+          </div>
+        </el-dialog>
+      </el-tab-pane>
     </el-tabs>
   </div>
 </template>
 
 <script>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { datasetApi } from '../../api'
+import { readLoggedUsername } from '../../utils/user'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft } from '@element-plus/icons-vue'
+import { useAsyncJob } from '../../composables/useAsyncJob'
 
 export default {
   name: 'DatasetDetail',
@@ -276,7 +450,7 @@ export default {
     const router = useRouter()
     const datasetId = ref(Number(route.params.id))
     const dataset = ref({})
-    const activeTab = ref('data')
+    const activeTab = ref(route.query.tab || 'data')
 
     // Schema
     const schemaFields = ref([])
@@ -329,35 +503,213 @@ export default {
       router.push({ path: '/analysis', query: { taskId, view: 'overview' } })
     }
 
+    // ===== 金标准标注 =====
+    const goldItems = ref([])
+    const goldTotal = ref(0)
+    const goldPage = ref(1)
+    const goldSize = ref(20)
+    const goldLoading = ref(false)
+    const goldStatsLoading = ref(false)
+    const goldStatsData = ref(null)
+    // 标注者身份：优先记忆过的手填名字，否则自动带入登录账号
+    const annotatorName = ref(localStorage.getItem('goldAnnotator') || readLoggedUsername() || '')
+    const annotatorRole = ref(localStorage.getItem('goldAnnotatorRole') || 'ANNOTATOR')
+    const showGoldWorkbench = ref(false)
+    const goldQueue = ref([])
+    const goldIdx = ref(0)
+    const wbForm = ref({ isBadcase: 1, comment: '' })
+    const wbSaving = ref(false)
+    const goldStage = computed(() => goldQueue.value[goldIdx.value] || null)
+    const wbDoneCount = computed(() => goldQueue.value.filter(r => goldMyAnnotation(r)).length)
+
+    watch(annotatorName, (v) => localStorage.setItem('goldAnnotator', v))
+    watch(annotatorRole, (v) => localStorage.setItem('goldAnnotatorRole', v))
+
+    const loadGold = async () => {
+      goldLoading.value = true
+      try {
+        const res = await datasetApi.goldList(datasetId.value, goldPage.value, goldSize.value)
+        goldItems.value = res.data?.records || []
+        goldTotal.value = res.data?.total || 0
+      } catch (e) {
+        console.error('loadGold failed', e)
+        goldItems.value = []
+        goldTotal.value = 0
+      } finally { goldLoading.value = false }
+    }
+
+    const loadGoldStats = async () => {
+      goldStatsLoading.value = true
+      try {
+        const res = await datasetApi.goldStats(datasetId.value)
+        goldStatsData.value = res.data || null
+      } catch (e) {
+        console.error('loadGoldStats failed', e)
+        goldStatsData.value = null
+      } finally { goldStatsLoading.value = false }
+    }
+
+    const goldMyAnnotation = (row) => (row.annotations || []).find(a => a.annotator === annotatorName.value.trim()) || null
+
+    // ===== 连续标注工作台 =====
+    const startGoldWorkbench = (row) => {
+      if (!annotatorName.value.trim()) { ElMessage.warning('请先在上方填写标注者姓名'); return }
+      const idx = goldItems.value.findIndex(r => r.id === row.id)
+      goldQueue.value = goldItems.value.map(r => ({ ...r }))
+      goldIdx.value = idx >= 0 ? idx : 0
+      showGoldWorkbench.value = true
+      wbLoadStage()
+    }
+
+    const startGoldAll = () => {
+      if (!goldItems.value.length) { ElMessage.warning('本页暂无条目'); return }
+      const first = goldItems.value.findIndex(r => !goldMyAnnotation(r))
+      startGoldWorkbench(goldItems.value[first >= 0 ? first : 0])
+    }
+
+    const wbLoadStage = () => {
+      const s = goldStage.value
+      if (!s) return
+      const my = goldMyAnnotation(s)
+      wbForm.value = { isBadcase: my ? my.isBadcase : 1, comment: my?.comment || '' }
+    }
+
+    const wbPrev = () => { if (goldIdx.value > 0) { goldIdx.value--; wbLoadStage() } }
+    const wbNext = () => { if (goldIdx.value < goldQueue.value.length - 1) { goldIdx.value++; wbLoadStage() } }
+    const wbSaveOnly = () => wbSave(false)
+    const wbSaveNext = () => wbSave(true)
+
+    const wbSave = async (advance) => {
+      const s = goldStage.value
+      if (!s || !annotatorName.value.trim()) return
+      wbSaving.value = true
+      try {
+        await datasetApi.goldAnnotate(datasetId.value, {
+          datasetItemId: s.id,
+          annotator: annotatorName.value.trim(),
+          role: annotatorRole.value,
+          isBadcase: wbForm.value.isBadcase,
+          comment: wbForm.value.comment || ''
+        })
+        // 本地同步该条标注，保证「已由我标注」判断与自动跳过逻辑正确
+        const my = goldMyAnnotation(s)
+        const entry = { id: my?.id || Date.now(), annotator: annotatorName.value.trim(), role: annotatorRole.value, isBadcase: wbForm.value.isBadcase, comment: wbForm.value.comment || '' }
+        if (my) {
+          Object.assign(my, entry)
+        } else {
+          if (!s.annotations) s.annotations = []
+          s.annotations.push(entry)
+          s.annotationCount = (s.annotationCount || 0) + 1
+          if (wbForm.value.isBadcase === 1) s.badCount = (s.badCount || 0) + 1
+          else s.goodCount = (s.goodCount || 0) + 1
+        }
+        loadGold()
+        loadGoldStats()
+        if (!advance) { ElMessage.success('已保存 #' + s.seqNo); return }
+
+        let next = -1
+        for (let i = goldIdx.value + 1; i < goldQueue.value.length; i++) {
+          if (!goldMyAnnotation(goldQueue.value[i])) { next = i; break }
+        }
+        if (next >= 0) {
+          goldIdx.value = next
+          wbLoadStage()
+        } else {
+          ElMessage.success('本页标注完成')
+          showGoldWorkbench.value = false
+        }
+      } catch (e) { ElMessage.error('保存失败') }
+      finally { wbSaving.value = false }
+    }
+
+    const goldDisplayFields = (row) => {
+      if (!row) return []
+      const fields = []
+      for (const sf of schemaFields.value) {
+        if (!sf || !sf.fieldName) continue
+        const val = getItemFieldValue(row, sf)
+        if (val !== '' && val !== null && val !== undefined) {
+          fields.push({ fieldName: sf.fieldName, displayName: sf.displayName || sf.fieldName })
+        }
+      }
+      return fields
+    }
+
+    // 工作台打开时监听快捷键：1/2 快速判定，Enter 保存并下一条
+    watch(showGoldWorkbench, (open) => {
+      if (open) window.addEventListener('keydown', wbKeydown)
+      else window.removeEventListener('keydown', wbKeydown)
+    })
+    const wbKeydown = (e) => {
+      if (!showGoldWorkbench.value) return
+      const t = e.target
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) {
+        if (e.key !== 'Enter') return
+        if (t.tagName === 'INPUT') { e.preventDefault(); wbSaveNext() }
+        return
+      }
+      if (e.key === '1') { wbForm.value.isBadcase = 1 }
+      else if (e.key === '2') { wbForm.value.isBadcase = 0 }
+      else if (e.key === 'Enter') { e.preventDefault(); wbSaveNext() }
+    }
+
+    const removeGoldAnnotation = async (row) => {
+      if (!annotatorName.value.trim()) { ElMessage.warning('请先填写标注者姓名'); return }
+      await ElMessageBox.confirm('确定撤销你对这条的标注？', '撤销标注', { type: 'warning' })
+      try {
+        await datasetApi.goldRemove(datasetId.value, row.id, annotatorName.value.trim())
+        ElMessage.success('已撤销')
+        loadGold()
+        loadGoldStats()
+      } catch (e) { ElMessage.error('撤销失败') }
+    }
+
+    const pct = (v) => v == null ? '-' : (v * 100).toFixed(1) + '%'
+    const kappa = () => goldStatsData.value?.fleissKappa == null ? '-' : goldStatsData.value.fleissKappa.toFixed(2)
+    const roleCN = (r) => ({ ANNOTATOR: '标注员', EXPERT: '专家', REVIEWER: '复核' }[r] || r || '-')
+
+    watch(activeTab, (tab) => { if (tab === 'gold') { loadGold(); loadGoldStats() } })
+
     // ===== 重复检测 =====
     const showDuplicateDialog = ref(false)
     const dupFieldName = ref('question')
     const dupThreshold = ref(0.8)
-    const dupLoading = ref(false)
     const dupDetectResult = ref(null)
     const dupDeleting = ref(false)
+    const dupJob = reactive(useAsyncJob())
 
     const dupFieldNameValue = (sf) => {
       const map = { QUESTION: 'question', REFERENCE: 'referenceAnswer', CONTEXT: 'context', CATEGORY: 'category' }
-      return map[sf.role] || ''
+      // 核心角色用语义字段名；MODEL_RESPONSE 等用原始列名——
+      // 后端会先从核心字段取值，取不到再从 extra_fields 按列名取
+      return map[sf.role] || sf.fieldName
     }
+
+    // schema 里没有 question 字段时，默认选中第一个可选字段，避免下拉选中后显示空白
+    watch(schemaFields, (list) => {
+      if (!list || !list.length) return
+      const valid = list.filter(sf => sf.fieldName).map(sf => dupFieldNameValue(sf))
+      if (valid.length && !valid.includes(dupFieldName.value)) {
+        dupFieldName.value = valid[0]
+      }
+    }, { deep: true })
 
     const runDuplicateDetect = async () => {
       if (!dupFieldName.value) { ElMessage.warning('请选择检测字段'); return }
-      dupLoading.value = true
-      try {
-        const res = await datasetApi.detectDuplicates(datasetId.value, dupFieldName.value, dupThreshold.value)
-        dupDetectResult.value = res.data
-        // 初始化选中状态：每组第一条默认保留，其余默认选中删除
-        if (res.data.groups) {
-          res.data.groups.forEach(g => {
-            g._allSelected = false
-            g._indeterminate = false
-            g.items.forEach((item, i) => { item._selected = i > 0 })
-          })
-        }
-      } catch (e) { ElMessage.error('检测失败') }
-      finally { dupLoading.value = false }
+      dupDetectResult.value = null
+      const ok = await dupJob.start(() => datasetApi.detectDuplicates(datasetId.value, dupFieldName.value, dupThreshold.value))
+      if (!ok) return
+      if (dupJob.errorMessage) { ElMessage.error(dupJob.errorMessage); return }
+      const data = dupJob.result
+      dupDetectResult.value = data
+      // 初始化选中状态：每组第一条默认保留，其余默认选中删除
+      if (data && data.groups) {
+        data.groups.forEach(g => {
+          g._allSelected = false
+          g._indeterminate = false
+          g.items.forEach((item, i) => { item._selected = i > 0 })
+        })
+      }
     }
 
     const toggleGroupAll = (group, val) => {
@@ -400,37 +752,48 @@ export default {
     }
 
     const loadDataset = async () => {
-      const res = await datasetApi.getById(datasetId.value)
-      dataset.value = res.data || {}
-      if (dataset.value.name) {
-        versionsLoading.value = true
-        try { const vres = await datasetApi.listVersions(dataset.value.name); versions.value = vres.data || [] } finally { versionsLoading.value = false }
-      }
+      try {
+        const res = await datasetApi.getById(datasetId.value)
+        dataset.value = res.data || {}
+        if (dataset.value.name) {
+          versionsLoading.value = true
+          try { const vres = await datasetApi.listVersions(dataset.value.name); versions.value = vres.data || [] } finally { versionsLoading.value = false }
+        }
+      } catch (e) { console.error('loadDataset failed', e) }
     }
 
     const loadSchema = async () => {
-      const res = await datasetApi.getSchema(datasetId.value)
-      schemaFields.value = (res.data || []).map(s => ({ ...s }))
+      try {
+        const res = await datasetApi.getSchema(datasetId.value)
+        schemaFields.value = (res.data || []).map(s => ({ ...s }))
+      } catch (e) {
+        console.error('loadSchema failed', e)
+        schemaFields.value = []
+      }
     }
 
     const loadItems = async () => {
       itemsLoading.value = true
       try {
         const res = await datasetApi.listItems(datasetId.value, itemPage.value, itemSize.value)
-        items.value = res.data.records
-        itemTotal.value = res.data.total
+        items.value = res.data?.records || []
+        itemTotal.value = res.data?.total || 0
+      } catch (e) {
+        console.error('loadItems failed', e)
+        items.value = []
+        itemTotal.value = 0
       } finally { itemsLoading.value = false }
     }
 
     // ===== Schema helpers =====
-    const roleLabel = (r) => ({ QUESTION: '问题', REFERENCE: '参考答案', CONTEXT: '上下文', CATEGORY: '分类', CUSTOM: '自定义' }[r] || r)
+    const roleLabel = (r) => ({ QUESTION: '问题', REFERENCE: '参考答案', CONTEXT: '上下文', CATEGORY: '分类', MODEL_RESPONSE: '模型回答', CUSTOM: '自定义' }[r] || r)
     const formatTime = (row, column, cellValue) => {
       if (!cellValue) return '-'
       const d = new Date(cellValue)
       if (isNaN(d.getTime())) return cellValue
       return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
     }
-    const roleTagType = (r) => ({ QUESTION: 'danger', REFERENCE: 'success', CONTEXT: 'warning', CATEGORY: '', CUSTOM: 'info' }[r] || 'info')
+    const roleTagType = (r) => ({ QUESTION: 'danger', REFERENCE: 'success', CONTEXT: 'warning', CATEGORY: '', MODEL_RESPONSE: 'primary', CUSTOM: 'info' }[r] || 'info')
 
     const addSchemaField = () => {
       if (!newField.value.fieldName) { ElMessage.warning('字段名不能为空'); return }
@@ -571,7 +934,8 @@ export default {
             role: old ? old.role : (m.role || 'CUSTOM'),
             description: old ? old.description : (m.description || ''),
             required: old ? old.required : (m.required || 0),
-            sortOrder: m.sortOrder || 0
+            sortOrder: m.sortOrder || 0,
+            selected: true
           }
         })
         newVersionStep.value = 1
@@ -579,18 +943,21 @@ export default {
     }
 
     const submitNewVersion = async () => {
+      const selectedFields = nvMappingFields.value.filter(f => f.selected)
+      if (!selectedFields.length) { ElMessage.warning('请至少勾选一个字段'); return }
       nvUploading.value = true
       try {
         const fd = new FormData()
         fd.append('file', nvFile.value)
         fd.append('name', dataset.value.name)
+        fd.append('parentId', datasetId.value)
         fd.append('description', newVersionDesc.value || '')
         // 继承当前数据集的评测类型和模型结果
         fd.append('hasReference', dataset.value.hasReference !== undefined && dataset.value.hasReference !== null ? dataset.value.hasReference : 1)
         fd.append('hasModelResponse', dataset.value.hasModelResponse !== undefined && dataset.value.hasModelResponse !== null ? dataset.value.hasModelResponse : 0)
-        fd.append('schemaFields', JSON.stringify(nvMappingFields.value))
+        fd.append('schemaFields', JSON.stringify(selectedFields))
         fd.append('columnMapping', JSON.stringify(
-          nvMappingFields.value.reduce((m, f) => { m[f.fieldName] = f.role; return m }, {})
+          selectedFields.reduce((m, f) => { m[f.fieldName] = f.role; return m }, {})
         ))
         const res = await datasetApi.upload(fd)
         ElMessage.success(`新版本 v${res.data.version} 创建成功`)
@@ -611,6 +978,11 @@ export default {
       if (newId) { datasetId.value = Number(newId); loadDataset(); loadSchema(); loadItems(); loadEvalHistory() }
     })
 
+    // 支持列表页「提交新版本」等入口通过 ?tab=version 直达版本历史
+    watch(() => route.query.tab, (newTab) => {
+      if (newTab) activeTab.value = newTab
+    })
+
     return {
       dataset, datasetId, activeTab,
       schemaFields, savingSchema, showAddSchemaField, newField, addSchemaField, saveSchema, roleLabel, roleTagType, formatTime,
@@ -622,8 +994,13 @@ export default {
       nvMappingFields, nvPreviewData, handleNvFileChange, handleNvFileExceed, previewNewVersion, submitNewVersion,
       formatFileSize,
       evalHistory, evalHistoryLoading, statusLabel, goEvalHistory,
-      showDuplicateDialog, dupFieldName, dupThreshold, dupLoading, dupDetectResult, dupDeleting,
-      dupFieldNameValue, runDuplicateDetect, toggleGroupAll, updateGroupState, dupSelectedCount, batchDeleteDuplicates
+      showDuplicateDialog, dupFieldName, dupThreshold, dupJob, dupDetectResult, dupDeleting,
+      dupFieldNameValue, runDuplicateDetect, toggleGroupAll, updateGroupState, dupSelectedCount, batchDeleteDuplicates,
+      goldItems, goldTotal, goldPage, goldSize, goldLoading, goldStatsLoading, goldStatsData,
+      annotatorName, annotatorRole, loadGold, loadGoldStats, goldMyAnnotation,
+      showGoldWorkbench, goldQueue, goldIdx, wbForm, wbSaving, goldStage, wbDoneCount,
+      startGoldWorkbench, startGoldAll, wbPrev, wbNext, wbSaveOnly, wbSaveNext, goldDisplayFields,
+      removeGoldAnnotation, pct, kappa, roleCN
     }
   }
 }
@@ -652,7 +1029,8 @@ export default {
   flex-direction: column;
 }
 /* 数据条目 Tab：工具条固定、表格占满剩余空间并内部滚动 */
-.data-tab-pane {
+.data-tab-pane,
+.schema-tab-pane {
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -660,19 +1038,22 @@ export default {
 .data-tab-toolbar {
   flex-shrink: 0;
 }
-.data-tab-table {
+.data-tab-table,
+.schema-tab-table {
   flex: 1;
   min-height: 0;
   overflow: hidden;
 }
-.data-tab-table :deep(.el-table) {
+.data-tab-table :deep(.el-table),
+.schema-tab-table :deep(.el-table) {
   height: 100%;
 }
-.data-tab-table :deep(.el-table__inner-wrapper) {
+.data-tab-table :deep(.el-table__inner-wrapper),
+.schema-tab-table :deep(.el-table__inner-wrapper) {
   height: 100%;
 }
 .data-tab-table :deep(.el-table__body-wrapper) {
-  height: calc(100% - 40px); /* 减去表头高度 */
+  overflow-y: auto;
 }
 /* 单元格内容自动换行，显示完整 */
 .cell-wrap {
@@ -732,4 +1113,41 @@ export default {
 .dup-item-badge.sim { background: rgba(249, 115, 22, 0.1); color: #f97316; }
 .dup-del-hint { margin-right: 12px; font-size: 13px; color: var(--text-sec); }
 .dup-del-hint b { color: var(--red); font-weight: 700; }
+
+/* 金标准标注 */
+.gold-stats { display: flex; gap: 12px; align-items: stretch; flex-wrap: wrap; }
+.gold-stat-card { min-width: 130px; padding: 12px 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-input); }
+.gold-stat-num { font-size: 22px; font-weight: 700; color: var(--accent); }
+.gold-stat-label { font-size: 12px; color: var(--text-mute); margin-top: 4px; }
+.gold-annotators { flex: 1; min-width: 260px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-input); }
+.gold-annotators-title { font-size: 12px; font-weight: 600; color: var(--text-sec); margin-bottom: 8px; }
+.gold-annotator-tags { display: flex; flex-wrap: wrap; gap: 8px; }
+.gold-anno-chip { margin-right: 6px; }
+.gold-dialog-question { background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: 13px; color: var(--text-prime); max-height: 120px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
+
+/* 连续标注工作台 */
+.gold-wb { display: flex; flex-direction: column; height: 72vh; min-height: 420px; }
+.gold-wb-nav { display: flex; align-items: center; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.gold-wb-pos { font-size: 13px; font-weight: 700; color: var(--text-prime); }
+.gold-wb-done { font-size: 12px; color: var(--text-sec); }
+.gold-wb-done b { color: var(--accent); font-weight: 700; }
+.gold-wb-body { flex: 1; min-height: 0; display: flex; gap: 16px; padding-top: 14px; }
+.gold-wb-left { flex: 1; min-width: 0; overflow-y: auto; background: var(--bg-input); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+.gold-wb-fields { display: flex; flex-direction: column; gap: 14px; }
+.gold-wb-field-label { font-size: 12px; font-weight: 700; color: var(--text-sec); margin-bottom: 4px; }
+.gold-wb-field-value { font-size: 13px; color: var(--text-prime); white-space: pre-wrap; word-break: break-word; line-height: 1.6; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.gold-wb-empty { text-align: center; color: var(--text-mute); padding: 60px 0; font-size: 13px; }
+.gold-wb-right { width: 300px; flex-shrink: 0; display: flex; flex-direction: column; gap: 16px; }
+.gold-wb-sec-title { font-size: 12px; font-weight: 700; color: var(--text-sec); margin-bottom: 8px; }
+.gold-wb-ref-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.gold-wb-btns { display: flex; gap: 10px; }
+.gold-wb-btn { flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg-input); cursor: pointer; text-align: left; transition: all .15s; }
+.gold-wb-btn .gold-wb-key { position: absolute; /* 占位 */ }
+.gold-wb-btn.bad { color: var(--red); }
+.gold-wb-btn.good { color: var(--accent); }
+.gold-wb-btn .gold-wb-btn-sub { font-size: 11px; color: var(--text-mute); font-weight: 400; }
+.gold-wb-btn.active.bad { background: var(--red-soft); border-color: var(--red); }
+.gold-wb-btn.active.good { background: var(--accent-soft); border-color: var(--accent); }
+.gold-wb-actions { display: flex; justify-content: flex-end; gap: 10px; }
+.gold-wb-kbd-hint { font-size: 11px; color: var(--text-mute); text-align: right; }
 </style>

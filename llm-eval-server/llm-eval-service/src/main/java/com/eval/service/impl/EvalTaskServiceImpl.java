@@ -3,6 +3,7 @@ package com.eval.service.impl;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.eval.common.constant.KafkaTopic;
 import com.eval.common.constant.ShardStatus;
@@ -43,12 +44,13 @@ public class EvalTaskServiceImpl implements EvalTaskService {
     private final EvalPromptMapper promptMapper;
     private final EvalTaskShardMapper shardMapper;
     private final EvalDatasetItemMapper datasetItemMapper;
+    private final EvalDatasetSchemaMapper schemaMapper;
     private final StringRedisTemplate redisTemplate;
     private final KafkaTemplate<String, String> kafkaTemplate;
 
     @Override
     @Transactional
-    public EvalTask create(EvalTaskDTO dto) {
+    public EvalTask create(EvalTaskDTO dto, Long createdBy) {
         EvalDataset dataset = datasetMapper.selectById(dto.getDatasetId());
         if (dataset == null) throw new BusinessException("数据集不存在");
 
@@ -86,10 +88,16 @@ public class EvalTaskServiceImpl implements EvalTaskService {
         task.setDatasetId(dto.getDatasetId());
         task.setJudgeModelId(dto.getJudgeModelId());
         task.setAnswerSource("api".equals(dto.getAnswerSource()) ? "api" : "dataset");
-        task.setPromptTemplate(dto.getPromptTemplate());
+        // 自动生成调用模板：如果前端没传或为空，从数据集 schema 推导
+        String promptTemplate = dto.getPromptTemplate();
+        if ("api".equals(task.getAnswerSource()) && StrUtil.isBlank(promptTemplate)) {
+            promptTemplate = autoGenerateCallTemplate(dto.getDatasetId());
+        }
+        task.setPromptTemplate(promptTemplate);
         task.setFieldMapping(dto.getFieldMapping());
         task.setStatus(TaskStatus.PENDING);
         task.setProgress(0);
+        task.setCreatedBy(createdBy);
         task.setCreatedAt(LocalDateTime.now());
         taskMapper.insert(task);
 
@@ -144,11 +152,16 @@ public class EvalTaskServiceImpl implements EvalTaskService {
     public void start(Long id) {
         EvalTask task = taskMapper.selectById(id);
         if (task == null) throw new BusinessException("评测任务不存在");
-        if (!TaskStatus.PENDING.equals(task.getStatus())) throw new BusinessException("任务状态不允许启动: " + task.getStatus());
 
-        // 更新任务状态为运行中
-        task.setStatus(TaskStatus.RUNNING);
-        taskMapper.updateById(task);
+        // 乐观锁：CAS 更新状态，防止并发重复启动
+        int updated = taskMapper.update(null,
+                new LambdaUpdateWrapper<EvalTask>()
+                        .eq(EvalTask::getId, id)
+                        .eq(EvalTask::getStatus, TaskStatus.PENDING)
+                        .set(EvalTask::getStatus, TaskStatus.RUNNING));
+        if (updated == 0) {
+            throw new BusinessException("任务状态不允许启动（可能已被其他操作启动）: " + task.getStatus());
+        }
 
         // ===== 分片调度：将评测任务拆分为多个分片发送到 Kafka =====
         dispatchShards(task);
@@ -237,8 +250,16 @@ public class EvalTaskServiceImpl implements EvalTaskService {
         if (TaskStatus.COMPLETED.equals(task.getStatus()) || TaskStatus.CANCELLED.equals(task.getStatus())) {
             throw new BusinessException("任务已结束，无法取消");
         }
-        task.setStatus(TaskStatus.CANCELLED);
-        taskMapper.updateById(task);
+
+        // 乐观锁：CAS 更新状态，防止并发取消冲突
+        int updated = taskMapper.update(null,
+                new LambdaUpdateWrapper<EvalTask>()
+                        .eq(EvalTask::getId, id)
+                        .in(EvalTask::getStatus, TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.FAILED)
+                        .set(EvalTask::getStatus, TaskStatus.CANCELLED));
+        if (updated == 0) {
+            throw new BusinessException("任务状态不允许取消: " + task.getStatus());
+        }
         // 清理分布式锁，让 Worker/Consumer 尽快停止
         redisTemplate.delete("eval:task:" + id + ":exec-lock");
         // 清理所有分片锁
@@ -277,5 +298,57 @@ public class EvalTaskServiceImpl implements EvalTaskService {
         long failed = Long.parseLong(
                 String.valueOf(redisTemplate.opsForHash().get(progressKey, "FAILED")));
         return (int) ((completed + failed) * 100 / total);
+    }
+
+    /**
+     * 重试失败分片：查找 RUNNING 任务中可重试的 FAILED 分片，重新发送到 Kafka
+     * 由 Worker 定期调用，或在 checkAndTriggerJudge 发现全部终态时调用
+     */
+    @Override
+    public void retryFailedShards(Long taskId) {
+        EvalTask task = taskMapper.selectById(taskId);
+        if (task == null || !TaskStatus.RUNNING.equals(task.getStatus())) return;
+
+        List<EvalTaskShard> failedShards = shardMapper.selectList(
+                new LambdaQueryWrapper<EvalTaskShard>()
+                        .eq(EvalTaskShard::getTaskId, taskId)
+                        .eq(EvalTaskShard::getStatus, ShardStatus.FAILED));
+
+        for (EvalTaskShard shard : failedShards) {
+            if (shard.getRetryCount() != null && shard.getRetryCount() >= 2) {
+                log.info("分片已达最大重试次数，跳过: taskId={}, shard={}, retry={}",
+                        taskId, shard.getShardIndex(), shard.getRetryCount());
+                continue;
+            }
+            // 重新发送分片消息到 Kafka
+            try {
+                ShardMessage msg = new ShardMessage();
+                msg.setTaskId(taskId);
+                msg.setShardIndex(shard.getShardIndex());
+                msg.setTotalCount(shard.getShardSize());
+                msg.setCases(cn.hutool.json.JSONUtil.toList(shard.getShardData(), com.eval.model.dto.CaseItem.class));
+                kafkaTemplate.send(com.eval.common.constant.KafkaTopic.EVAL_SHARD_EXECUTE, String.valueOf(taskId), cn.hutool.json.JSONUtil.toJsonStr(msg));
+                log.info("分片已重新调度: taskId={}, shard={}", taskId, shard.getShardIndex());
+            } catch (Exception e) {
+                log.error("分片重新调度失败: taskId={}, shard={}", taskId, shard.getShardIndex(), e);
+            }
+        }
+    }
+
+    /**
+     * 根据数据集 schema 自动生成调用被测模型的 prompt 模板
+     * 规则：用 {字段名} 引用每个字段，字段按 sortOrder 排序
+     */
+    private String autoGenerateCallTemplate(Long datasetId) {
+        List<EvalDatasetSchema> schemas = schemaMapper.selectList(
+                new LambdaQueryWrapper<EvalDatasetSchema>()
+                        .eq(EvalDatasetSchema::getDatasetId, datasetId)
+                        .orderByAsc(EvalDatasetSchema::getSortOrder));
+        if (schemas.isEmpty()) return "{question}";
+        // 优先用 QUESTION 角色的字段作为主输入
+        EvalDatasetSchema questionField = schemas.stream()
+                .filter(s -> "QUESTION".equals(s.getRole()))
+                .findFirst().orElse(schemas.get(0));
+        return "{" + questionField.getFieldName() + "}";
     }
 }

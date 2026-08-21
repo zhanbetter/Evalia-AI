@@ -6,12 +6,15 @@ import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.eval.common.auth.AuthContext;
 import com.eval.common.exception.BusinessException;
 import com.eval.common.result.PageResult;
+import com.eval.common.util.OwnershipUtil;
 import com.eval.dao.mapper.EvalModelConfigMapper;
 import com.eval.dao.mapper.EvalPromptMapper;
 import com.eval.dao.mapper.EvalPromptVersionMapper;
 import com.eval.model.dto.PromptDTO;
+import com.eval.model.dto.NameCheckResult;
 import com.eval.model.entity.EvalModelConfig;
 import com.eval.model.entity.EvalPrompt;
 import com.eval.model.entity.EvalPromptVersion;
@@ -23,6 +26,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
@@ -38,7 +42,31 @@ public class PromptServiceImpl implements PromptService {
     private final LlmApiClient llmApiClient;
 
     @Override
-    public EvalPrompt add(PromptDTO dto) {
+    public NameCheckResult checkName(String name, Long excludePromptId) {
+        NameCheckResult result = new NameCheckResult();
+        if (StrUtil.isBlank(name)) {
+            return result;
+        }
+        EvalPrompt existing = promptMapper.selectOne(
+                new LambdaQueryWrapper<EvalPrompt>()
+                        .eq(EvalPrompt::getName, name.trim())
+                        .ne(excludePromptId != null, EvalPrompt::getId, excludePromptId)
+                        .last("LIMIT 1"));
+        result.setExists(existing != null);
+        result.setVersionCount(existing != null ? 1 : 0);
+        result.setLatestVersion(existing != null && existing.getVersion() != null ? existing.getVersion() : 0);
+        result.setNextVersion(1);
+        result.setTargetVersionTaken(existing != null);
+        return result;
+    }
+
+    @Override
+    public EvalPrompt add(PromptDTO dto, Long createdBy) {
+        // 名称全局唯一：重复名称直接拒绝
+        NameCheckResult check = checkName(dto.getName(), null);
+        if (check.isExists()) {
+            throw new BusinessException("评估器名称「" + dto.getName().trim() + "」已存在，请更换名称");
+        }
         EvalPrompt prompt = new EvalPrompt();
         prompt.setName(dto.getName());
         prompt.setDescription(dto.getDescription() != null ? dto.getDescription() : "");
@@ -63,6 +91,7 @@ public class PromptServiceImpl implements PromptService {
 
         prompt.setStatus(1);
         prompt.setVersion(1);
+        prompt.setCreatedBy(createdBy);
         prompt.setCreatedAt(LocalDateTime.now());
         promptMapper.insert(prompt);
         log.info("评测Prompt创建成功: id={}, name={}", prompt.getId(), prompt.getName());
@@ -84,6 +113,13 @@ public class PromptServiceImpl implements PromptService {
 
         // 计算目标值
         String newName = dto.getName();
+        // 名称唯一性校验：改名后与他人重名则拒绝（排除自身）
+        if (StrUtil.isNotBlank(newName)) {
+            NameCheckResult check = checkName(newName, id);
+            if (check.isExists()) {
+                throw new BusinessException("评估器名称「" + newName.trim() + "」已被其他评估器使用，请更换名称");
+            }
+        }
         String newDesc = dto.getDescription() != null ? dto.getDescription() : "";
         String newDimCfg = dto.getDimensionsConfig();
         String newMode = "reference".equals(dto.getEvaluationMode()) ? "reference" : "quality";
@@ -189,7 +225,10 @@ public class PromptServiceImpl implements PromptService {
     }
 
     @Override
-    public void deleteById(Long id) {
+    public void deleteById(Long id, AuthContext ctx) {
+        EvalPrompt prompt = promptMapper.selectById(id);
+        if (prompt == null) throw new BusinessException("评估器不存在");
+        OwnershipUtil.assertCanDelete(prompt.getCreatedBy(), ctx, "评估器");
         promptMapper.deleteById(id);
     }
 
@@ -200,6 +239,11 @@ public class PromptServiceImpl implements PromptService {
 
     @Override
     public String polish(Long modelId, String dimensionsConfig) {
+        return polishParallel(modelId, dimensionsConfig, null);
+    }
+
+    @Override
+    public String polishParallel(Long modelId, String dimensionsConfig, java.util.function.Consumer<String> progress) {
         if (StrUtil.isBlank(dimensionsConfig)) {
             throw new BusinessException("维度配置不能为空");
         }
@@ -216,21 +260,78 @@ public class PromptServiceImpl implements PromptService {
             throw new BusinessException("润色模型不可用，请先在模型管理中配置并启用");
         }
 
-        // 逐维度润色：每个维度单独调用模型，保持结构不变，只优化文案
+        // 并行润色每个维度：保持结构不变，只优化 rubric 文案
         JSONObject resultConfig = new JSONObject();
         resultConfig.set("role", config.getRole());
         resultConfig.set("context_template", config.getContextTemplate());
         resultConfig.set("badcase_rule", config.getBadcaseRule());
         resultConfig.set("extra_instructions", config.getExtraInstructions());
 
+        List<PromptGenerator.DimensionDef> dims = config.getDimensions();
+        int n = dims.size();
         JSONArray resultDims = new JSONArray();
-        for (PromptGenerator.DimensionDef dim : config.getDimensions()) {
-            JSONObject polished = polishDimension(model, dim);
-            resultDims.add(polished);
+        JSONObject[] results = new JSONObject[n];
+        java.util.concurrent.atomic.AtomicInteger done = new java.util.concurrent.atomic.AtomicInteger(0);
+
+        // 并发提交：每个维度一个任务，带序号以便按原顺序组装
+        List<java.util.concurrent.CompletableFuture<Void>> futures = new ArrayList<>(n);
+        for (int i = 0; i < n; i++) {
+            final int idx = i;
+            final PromptGenerator.DimensionDef dim = dims.get(i);
+            futures.add(java.util.concurrent.CompletableFuture.runAsync(() -> {
+                results[idx] = polishDimensionSafe(model, dim);
+                if (progress != null) {
+                    progress.accept(done.incrementAndGet() + "/" + n + "：" + (dim.getName() == null ? "" : dim.getName()));
+                }
+            }, polishExecutor));
+        }
+
+        // 等待全部完成
+        java.util.concurrent.CompletableFuture.allOf(futures.toArray(new java.util.concurrent.CompletableFuture[0])).join();
+
+        // 按原顺序组装（单个维度失败已兜底为原始配置）
+        for (int i = 0; i < n; i++) {
+            resultDims.add(results[i] != null ? results[i] : buildDimBase(dims.get(i)).set("rubric", toRubricArray(dims.get(i))));
         }
         resultConfig.set("dimensions", resultDims);
 
         return resultConfig.toString();
+    }
+
+    /** 润色线程池（3 并发，LLM 调用为 IO 密集，足够发挥并行收益且不压垮 API 限流） */
+    private final java.util.concurrent.ExecutorService polishExecutor =
+            java.util.concurrent.Executors.newFixedThreadPool(3);
+
+    /**
+     * 润色单个维度（并行执行），失败时保留原始配置而不是让整个任务失败
+     */
+    private JSONObject polishDimensionSafe(EvalModelConfig model, PromptGenerator.DimensionDef dim) {
+        try {
+            return polishDimension(model, dim);
+        } catch (Exception e) {
+            log.warn("润色维度失败(保留原配置): dim={}", dim.getName(), e);
+            JSONObject fallback = buildDimBase(dim);
+            fallback.set("rubric", toRubricArray(dim));
+            return fallback;
+        }
+    }
+
+    /**
+     * 构建维度的基础JSON（不含 rubric，由调用方设置）
+     */
+    private JSONObject buildDimBase(PromptGenerator.DimensionDef dim) {
+        JSONObject resultDim = new JSONObject();
+        resultDim.set("name", dim.getName());
+        resultDim.set("scoring_type", dim.getScoringType());
+        resultDim.set("badcase_threshold", dim.getBadcaseThreshold());
+        if (dim.getEnumValues() != null && dim.getEnumValues().length > 0) {
+            JSONArray enumArr = new JSONArray();
+            for (String v : dim.getEnumValues()) {
+                enumArr.add(v);
+            }
+            resultDim.set("enum_values", enumArr);
+        }
+        return resultDim;
     }
 
     /**
@@ -273,17 +374,7 @@ public class PromptServiceImpl implements PromptService {
             jsonStr = jsonStr.replaceAll("```json\\s*", "").replaceAll("```\\s*", "").trim();
         }
 
-        JSONObject resultDim = new JSONObject();
-        resultDim.set("name", dim.getName());
-        resultDim.set("scoring_type", dim.getScoringType());
-        resultDim.set("badcase_threshold", dim.getBadcaseThreshold());
-        if (dim.getEnumValues() != null && dim.getEnumValues().length > 0) {
-            JSONArray enumArr = new JSONArray();
-            for (String v : dim.getEnumValues()) {
-                enumArr.add(v);
-            }
-            resultDim.set("enum_values", enumArr);
-        }
+        JSONObject resultDim = buildDimBase(dim);
 
         try {
             JSONObject resp = JSONUtil.parseObj(jsonStr);
@@ -331,8 +422,8 @@ public class PromptServiceImpl implements PromptService {
                 "你需要将其转换为结构化的评测维度配置。\n\n" +
                 "输出必须是严格的JSON格式，结构如下：\n" +
                 "{\n" +
-                "  \"role\": \"裁判模型角色设定，一句话描述其身份\",\n" +
-                "  \"context_template\": \"\",\n" +
+                "  \"role\": \"你是一名专业的评测专家，负责评判AI回答的质量。\",\n" +
+                "  \"context_template\": \"${question}：用户问题\\n${model_response}：模型回答\",\n" +
                 "  \"badcase_rule\": \"any\",\n" +
                 "  \"extra_instructions\": \"用户的补充要求(如有，否则为空字符串)\",\n" +
                 "  \"dimensions\": [\n" +
@@ -352,7 +443,9 @@ public class PromptServiceImpl implements PromptService {
                 "1. scoring_type 使用 \"score\"（1/3/5分制）或 \"boolean\"（采纳/不采纳）或 \"enum\"（分级，需提供 enum_values 数组）\n" +
                 "2. 从用户描述中提取 2-5 个核心评测维度\n" +
                 "3. 每个维度的 rubric 描述要具体、可衡量、可操作\n" +
-                "4. 直接输出JSON，不要输出多余内容";
+                "4. context_template 必须填写，格式为 ${字段名}：说明，每行一个。常见占位符：${question}（用户问题）、${model_response}（模型回答）、${reference_answer}（参考答案，仅参考对照模式）、${context}（上下文）、${category}（分类）。根据用户描述的评测场景选择需要的占位符\n" +
+                "5. role 必须以「你是」开头，描述裁判模型的身份定位，如「你是一名专业的XX评测专家」。不要照搬用户的原话，而是基于用户描述的场景提炼出裁判角色\n" +
+                "6. 直接输出JSON，不要输出多余内容";
 
         String aiResponse = llmApiClient.chat(model, sys, text);
 
@@ -392,8 +485,19 @@ public class PromptServiceImpl implements PromptService {
                     d.set("rubric", defRubric);
                 }
             }
-            if (!parsed.containsKey("role") || StrUtil.isBlank(parsed.getStr("role"))) {
-                parsed.set("role", "你是一名专业的 AI 回答质量评测专家");
+            // 规范化角色设定：去句号、截断过长内容
+            String role = parsed.getStr("role");
+            if (StrUtil.isNotBlank(role)) {
+                role = role.replaceAll("[。.]+$", "").trim(); // 去掉末尾句号
+                if (role.length() > 80) role = role.substring(0, 80); // 截断过长的描述
+            }
+            if (StrUtil.isBlank(role)) {
+                role = "你是一名专业的 AI 回答质量评测专家";
+            }
+            parsed.set("role", role);
+            // 兜底：如果 AI 没有生成 context_template，自动填充默认值
+            if (!parsed.containsKey("context_template") || StrUtil.isBlank(parsed.getStr("context_template"))) {
+                parsed.set("context_template", "${question}：用户问题\n${model_response}：模型回答");
             }
             return parsed.toString();
         } catch (BusinessException e) {

@@ -63,6 +63,7 @@
 
 <script>
 import { ref, computed, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { resultApi } from '../../api'
 
 export default {
@@ -71,7 +72,8 @@ export default {
     taskId: Number, models: Array, prompts: Array, modelMap: Object, promptMap: Object,
     initialDimension: String
   },
-  setup(props, { emit }) {
+  setup(props) {
+    const router = useRouter()
     const loading = ref(false)
     const badcases = ref([])
     const page = ref(1)
@@ -128,7 +130,7 @@ export default {
     const onSearch = () => { page.value = 1; loadData() }
 
     const goReview = (bc) => {
-      emit('go-review', { modelConfigId: bc.modelConfigId, datasetItemId: bc.datasetItemId, promptId: bc.promptId })
+      router.push({ path: '/annotation', query: { taskId: props.taskId } })
     }
 
     watch(() => props.taskId, () => { page.value = 1; selectedDim.value = props.initialDimension || ''; loadDimCounts(); loadData() }, { immediate: true })

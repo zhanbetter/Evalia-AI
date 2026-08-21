@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS eval_dataset (
     has_reference TINYINT DEFAULT 1 COMMENT '是否含参考答案: 1-有(对照评测), 0-无(自由判断)',
     has_model_response TINYINT DEFAULT 0 COMMENT '是否含模型结果: 1-有(评测直接读), 0-无(评测时调API生成)',
     total_count INT DEFAULT 0 COMMENT '样本总数',
+    created_by BIGINT NULL COMMENT '创建者ID(eval_user.id)，NULL=历史无归属数据(仅管理员可删)',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_name_version (name, version)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='评测数据集';
@@ -59,6 +60,8 @@ CREATE TABLE IF NOT EXISTS eval_model_config (
     temperature DECIMAL(3,2) DEFAULT 0.70,
     max_tokens INT DEFAULT 2048,
     status TINYINT DEFAULT 1,
+    created_by BIGINT NULL COMMENT '创建者ID(eval_user.id)，NULL=历史无归属数据(仅管理员可删)',
+    is_deleted TINYINT DEFAULT 0 COMMENT '软删除: 0-正常 1-已删除',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='模型配置';
 
@@ -72,6 +75,7 @@ CREATE TABLE IF NOT EXISTS eval_prompt (
     dimensions_config TEXT NULL COMMENT '结构化维度配置JSON',
     evaluation_mode VARCHAR(16) DEFAULT 'quality' COMMENT '评测模式: quality-质量评判(无需参考答案), reference-参考对照(需参考答案)',
     status TINYINT DEFAULT 1 COMMENT '启用/禁用',
+    created_by BIGINT NULL COMMENT '创建者ID(eval_user.id)，NULL=历史无归属数据(仅管理员可删)',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='评测Prompt';
 
@@ -101,6 +105,7 @@ CREATE TABLE IF NOT EXISTS eval_task (
     field_mapping TEXT NULL COMMENT '占位符→数据集字段映射JSON',
     status VARCHAR(16) DEFAULT 'PENDING',
     progress INT DEFAULT 0,
+    created_by BIGINT NULL COMMENT '创建者ID(eval_user.id)，NULL=历史无归属数据',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     finished_at DATETIME NULL,
     INDEX idx_name_version (name, version)
@@ -287,3 +292,58 @@ CREATE TABLE IF NOT EXISTS eval_rss_source (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     UNIQUE KEY uk_feed_url (feed_url(255))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='RSS 订阅源';
+
+-- ============================================================
+-- 异步预分析任务（AI识别成规则 / 润色 / 重复检测）
+-- 耗时操作从同步HTTP改为异步任务模式：提交返回 jobId → 后台线程池执行 → 前端轮询
+-- ============================================================
+CREATE TABLE IF NOT EXISTS eval_async_job (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    job_type VARCHAR(30) NOT NULL COMMENT '任务类型: PARSE_DIMENSIONS/POLISH/DETECT_DUPLICATES',
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING' COMMENT 'PENDING/RUNNING/COMPLETED/FAILED',
+    progress INT DEFAULT 0 COMMENT '进度 0-100',
+    progress_text VARCHAR(255) DEFAULT '' COMMENT '进度描述（如 正在润色维度 2/5）',
+    payload TEXT COMMENT '请求参数JSON',
+    result_data LONGTEXT NULL COMMENT '结果JSON',
+    error_message TEXT NULL COMMENT '失败信息',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    started_at DATETIME NULL,
+    finished_at DATETIME NULL,
+    INDEX idx_type_status (job_type, status),
+    INDEX idx_status_created (status, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='异步预分析任务（AI识别/润色/重复检测）';
+
+-- ============================================================
+-- 金标准标注（条目级多标注者投片）
+-- 脱离任务/被测模型的独立标注台：多位标注者对数据集条目独立判定 good/bad，
+-- 用于标注覆盖率/一致率/Fleiss Kappa 统计（与 eval_gold_label 的模型裁决结论解耦）
+-- ============================================================
+CREATE TABLE IF NOT EXISTS eval_gold_annotation (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    dataset_item_id BIGINT NOT NULL COMMENT '数据集条目ID',
+    annotator VARCHAR(64) NOT NULL COMMENT '标注者',
+    role VARCHAR(32) DEFAULT 'ANNOTATOR' COMMENT '标注角色: ANNOTATOR-标注员 EXPERT-专家 REVIEWER-复核',
+    is_badcase TINYINT NOT NULL COMMENT '标注结论: 1-badcase 0-goodcase',
+    comment VARCHAR(500) COMMENT '标注备注',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_goldanno_item (dataset_item_id, annotator),
+    KEY idx_goldanno_item (dataset_item_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='金标准标注（条目级多标注者投片，脱离任务/模型的独立标注台）';
+
+-- ============================================================
+-- 平台用户（登录/注册/鉴权）
+-- 首个注册用户由代码自动赋予 ADMIN 角色，其余默认 USER；
+-- 注册需填写配置项 eval.security.register-code 指定的邀请码
+-- ============================================================
+CREATE TABLE IF NOT EXISTS eval_user (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(64) NOT NULL COMMENT '登录名（唯一）',
+    password VARCHAR(100) NOT NULL COMMENT 'BCrypt 哈希（hutool BCrypt，$2a$ 前缀）',
+    nickname VARCHAR(64) DEFAULT NULL COMMENT '昵称',
+    role VARCHAR(20) DEFAULT 'USER' COMMENT '角色: ADMIN-管理员 USER-普通用户',
+    status TINYINT DEFAULT 1 COMMENT '状态: 1-启用 0-禁用',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_user_username (username)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='平台用户（登录/注册/鉴权）';

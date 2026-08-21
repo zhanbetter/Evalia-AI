@@ -86,18 +86,27 @@ public class DatasetAdapter {
     }
 
     /**
-     * 根据 schema 中 CUSTOM 角色字段推断模型回答（更灵活的方式）
+     * 根据 schema 角色推断模型回答（优先 MODEL_RESPONSE，其次 name 匹配，最后 CUSTOM 推断）
      * @param item 数据集条目
      * @param schemaFields 数据集的 schema 字段定义
      */
     public String extractResponseFromItem(EvalDatasetItem item, List<com.eval.model.entity.EvalDatasetSchema> schemaFields) {
-        // 先走原有逻辑
+        // 先走原有逻辑（从 extraFields 中按名称匹配）
         String resp = extractResponseFromItem(item);
         if (resp != null) return resp;
 
-        // 若仍为空，从 schema 的 CUSTOM 字段中查找含 response/answer 相关关键词的字段
         if (schemaFields == null || item == null) return null;
         Map<String, String> extra = parseExtraFields(item.getExtraFields());
+
+        // 优先：显式标记为 MODEL_RESPONSE 的字段
+        for (com.eval.model.entity.EvalDatasetSchema sf : schemaFields) {
+            if ("MODEL_RESPONSE".equals(sf.getRole())) {
+                String val = extra.get(sf.getFieldName());
+                if (StrUtil.isNotBlank(val)) return val;
+            }
+        }
+
+        // 其次：从 CUSTOM 字段中按名称推断
         for (com.eval.model.entity.EvalDatasetSchema sf : schemaFields) {
             if (!"CUSTOM".equals(sf.getRole())) continue;
             String fn = sf.getFieldName() != null ? sf.getFieldName().toLowerCase() : "";
